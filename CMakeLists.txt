@@ -13,11 +13,27 @@ pkg_check_modules(FFMPEG REQUIRED
         libswscale
         libswresample
 )
+message("FFMPEG_INCLUDE_DIRS: ${FFMPEG_INCLUDE_DIRS}")
+message("FFMPEG_LIBRARY_DIRS: ${FFMPEG_LIBRARY_DIRS}")
+message("FFMPEG_LIBRARIES: ${FFMPEG_LIBRARIES}")
+message("FFMPEG_CFLAGS_OTHER: ${FFMPEG_CFLAGS_OTHER}")
 
 include_directories(${FFMPEG_INCLUDE_DIRS})
 link_directories(${FFMPEG_LIBRARY_DIRS})
 add_definitions(${FFMPEG_CFLAGS_OTHER})
 
+
+add_library(microlog STATIC
+        libs/microlog/microlog.c
+        libs/microlog/microlog.h)
+
+add_library(decoders STATIC
+        decoders/video_decoder.c
+        decoders/video_decoder.h)
+
 add_executable(VLC_Clone main.c)
 
-target_link_libraries(VLC_Clone ${FFMPEG_LIBRARIES})
+target_link_libraries(VLC_Clone PRIVATE
+        ${FFMPEG_LIBRARIES}
+        microlog
+        decoders)
