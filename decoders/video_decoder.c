@@ -109,29 +109,6 @@ static void convert_frames_to_rgb(VideoDecoder *decoder, struct SwsContext *sws_
               frame_rgb->linesize);
 }
 
-static void save_frames_as_ppm(AVFrame *frame, int width, int height, int iFrame) {
-    char szFilename[32];
-
-    sprintf(szFilename, "../out/ppm/frame%d.ppm", iFrame);
-    FILE *file = fopen(szFilename, "wb");
-    if (file == NULL) {
-        log_error("Could not open file %s", szFilename);
-        return;
-    }
-
-    // Write header
-    fprintf(file, "P6\n%d %d\n255\n", width, height);
-    log_info("Wrote header for frame %d", iFrame);
-
-    // Write pixel data
-    for (int y = 0; y < height; y++) {
-        fwrite(frame->data[0] + y * frame->linesize[0], 1, width * 3, file);
-    }
-
-    log_info("Saved frame %d to %s", iFrame, szFilename);
-    fclose(file);
-}
-
 static void cleanup_resources(AVFrame *frame, AVFrame *frame_rgb,
                               uint8_t *buffer, AVPacket *packet,
                               struct SwsContext *sws_ctx) {
@@ -175,7 +152,7 @@ VideoDecoder *video_decoder_init(const char *url) {
     return decoder;
 }
 
-int decode(VideoDecoder *decoder) {
+int decode(VideoDecoder *decoder, FrameProcessor processor, void *user_data) {
     AVFrame *frame = av_frame_alloc();
     AVFrame *frame_rgb = av_frame_alloc();
     uint8_t *rgb_buffer = NULL;
@@ -214,16 +191,18 @@ int decode(VideoDecoder *decoder) {
     while (av_read_frame(decoder->fmt_ctx, packet) >= 0) {
         if (packet->stream_index == decoder->video_stream_index) {
             log_debug("Got video packet with size %d", packet->size);
+            // Send packet for decoding
             if (avcodec_send_packet(decoder->codec_ctx, packet) < 0) {
                 log_error("Failed to send packet for decoding");
                 av_packet_unref(packet);
                 continue;
             }
 
+            // Get decoded frame
             while (avcodec_receive_frame(decoder->codec_ctx, frame) >= 0) {
                 convert_frames_to_rgb(decoder, sws_ctx, frame, frame_rgb);
-                save_frames_as_ppm(frame_rgb, decoder->codec_ctx->width,
-                                   decoder->codec_ctx->height, i++);
+
+                processor(frame_rgb, user_data);
             }
         }
         av_packet_unref(packet);

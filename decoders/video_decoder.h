@@ -8,6 +8,8 @@
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 
+typedef void (*FrameProcessor)(AVFrame *frame, void *user_data);
+
 typedef struct VideoDecoder {
     /**
      * Exports all information about the file being read or written
@@ -38,8 +40,10 @@ VideoDecoder *video_decoder_init(const char *url);
 * 2. Turns comprersed packets into raw frames
 * 3. converts raw frames into RGB frames
 * 4. Saves the RGB frame to a file
+*
+* Function also takes in a callback to perform operations on decoded frames
 */
-int decode(VideoDecoder *decoder);
+int decode(VideoDecoder *decoder, FrameProcessor processor, void *user_data);
 
 /**
  * Closes the video decoder and frees all resources.
