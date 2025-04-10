@@ -32,6 +32,15 @@ typedef struct VideoDecoder {
  */
 VideoDecoder *video_decoder_init(const char *url);
 
+
+/**
+* 1. Reads chunkds of packets from the video stream
+* 2. Turns comprersed packets into raw frames
+* 3. converts raw frames into RGB frames
+* 4. Saves the RGB frame to a file
+*/
+int decode(VideoDecoder *decoder);
+
 /**
  * Closes the video decoder and frees all resources.
  * @param decoder Object to destroy
