@@ -71,3 +71,4 @@ CMakeUserPresets.json
 # CMake
 cmake-build-*/
 
+out/*
