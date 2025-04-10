@@ -42,7 +42,7 @@ static int setup_codec_context(VideoDecoder *decoder) {
     const AVStream *stream = decoder->fmt_ctx->streams[decoder->video_stream_index];
     const AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
     if (!codec) {
-        log_error("Unsupported codec!");
+        log_error("Codec not found!");
         return -1;
     }
 
@@ -58,10 +58,14 @@ static int setup_codec_context(VideoDecoder *decoder) {
     }
     log_info("Copied codex context");
 
-    if (avcodec_open2(decoder->codec_ctx, codec, NULL) < 0) {
-        log_error("Failed to initialize codex context");
+    AVDictionary *opts = NULL;
+    av_dict_set(&opts, "hwaccel", "videotoolbox", 0);
+    if (avcodec_open2(decoder->codec_ctx, codec, &opts) < 0) {
+        log_error("Failed to initialize codex context with HW acceleration");
+        av_dict_free(&opts);
         return -1;
     }
+    av_dict_free(&opts);
     log_info("Initialized codec context");
 
     return 0;
