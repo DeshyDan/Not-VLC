@@ -76,6 +76,7 @@ static int setup_codec_context(VideoDecoder *decoder) {
 }
 
 static int allocate_output_frame(VideoDecoder *decoder, AVFrame *frame, uint8_t **rgb_buffer) {
+    // TODO: Dynamically pass in destFomart
     int buffer_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24,
                                                decoder->codec_ctx->width,
                                                decoder->codec_ctx->height, 1);
@@ -114,9 +115,8 @@ static void cleanup_resources(AVFrame *frame, AVFrame *frame_rgb,
                               struct SwsContext *sws_ctx) {
     if (frame) av_frame_free(&frame);
     if (frame_rgb) av_frame_free(&frame_rgb);
-    // if (buffer) av_free(&buffer);
+    // if (buffer) av_free(buffer);
     if (packet) av_packet_free(&packet);
-    if (sws_ctx) sws_freeContext(sws_ctx);
 
     log_debug("Cleaned up decoder resources");
 }
@@ -152,34 +152,30 @@ VideoDecoder *video_decoder_init(const char *url) {
     return decoder;
 }
 
-int decode(VideoDecoder *decoder, FrameProcessor processor, void *user_data) {
+int decode(VideoDecoder *decoder, FrameProcessor processor, ProcessingContext *ctx) {
     AVFrame *frame = av_frame_alloc();
-    AVFrame *frame_rgb = av_frame_alloc();
+    AVFrame *frame_out = av_frame_alloc();
     uint8_t *rgb_buffer = NULL;
     AVPacket *packet = av_packet_alloc();
-    struct SwsContext *sws_ctx = sws_alloc_context();
+    struct SwsContext *sws_ctx = ctx->sws_ctx;
     int response = 0;
 
-    if (!frame || !frame_rgb || !packet) {
+    if (!frame || !frame_out || !packet) {
         log_error("Failed to allocate frames or packet");
         response = -1;
         goto cleanup;
     }
 
-    // Allocate RGB buffer and frame
-    if (allocate_output_frame(decoder, frame_rgb, &rgb_buffer) < 0) {
-        log_error("Could not allocate RGB buffer");
-        response = -1;
-        goto cleanup;
-    }
+    ctx->frame_out = frame;
+    ctx->decoder = decoder;
 
-    sws_ctx = sws_getContext(decoder->codec_ctx->width,
-                             decoder->codec_ctx->height,
-                             decoder->codec_ctx->pix_fmt,
-                             decoder->codec_ctx->width,
-                             decoder->codec_ctx->height,
-                             AV_PIX_FMT_RGB24,
-                             SWS_BILINEAR, NULL, NULL, NULL);
+    // // Allocate RGB buffer and frame
+    // if (allocate_output_frame(decoder, frame_out, &rgb_buffer) < 0) {
+    //     log_error("Could not allocate RGB buffer");
+    //     response = -1;
+    //     goto cleanup;
+    // }
+
     if (!sws_ctx) {
         log_error("Failed to create sws context");
         response = -1;
@@ -187,7 +183,6 @@ int decode(VideoDecoder *decoder, FrameProcessor processor, void *user_data) {
     }
     log_info("Created sws context");
 
-    int i = 0;
     while (av_read_frame(decoder->fmt_ctx, packet) >= 0) {
         if (packet->stream_index == decoder->video_stream_index) {
             log_debug("Got video packet with size %d", packet->size);
@@ -200,16 +195,18 @@ int decode(VideoDecoder *decoder, FrameProcessor processor, void *user_data) {
 
             // Get decoded frame
             while (avcodec_receive_frame(decoder->codec_ctx, frame) >= 0) {
-                convert_frames_to_rgb(decoder, sws_ctx, frame, frame_rgb);
+                //  convert_frames_to_rgb(decoder, sws_ctx, frame, frame_rgb);
 
-                processor(frame_rgb, user_data);
+                ctx->frame_count++;
+
+                processor(ctx);
             }
         }
         av_packet_unref(packet);
     }
 
 cleanup:
-    cleanup_resources(frame, frame_rgb, rgb_buffer, packet, sws_ctx);
+    cleanup_resources(frame, frame_out, rgb_buffer, packet, sws_ctx);
     return response;
 }
 

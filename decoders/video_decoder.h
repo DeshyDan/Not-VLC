@@ -5,10 +5,10 @@
 #ifndef VIDEO_DECODER_H
 #define VIDEO_DECODER_H
 
+#include <SDL_render.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 
-typedef void (*FrameProcessor)(AVFrame *frame, void *user_data);
 
 typedef struct VideoDecoder {
     /**
@@ -24,6 +24,17 @@ typedef struct VideoDecoder {
      */
     int video_stream_index;
 } VideoDecoder;
+
+typedef struct ProcessingContext {
+    VideoDecoder *decoder;
+    AVFrame *frame_out;
+    SDL_Texture *texture;
+    SDL_Renderer *renderer;
+    struct SwsContext *sws_ctx;
+    int frame_count;
+} ProcessingContext;
+
+typedef void (*FrameProcessor)(ProcessingContext *ctx);
 
 /**
  * Initializes a video decoder with the given URL. Objects returned contains all context
@@ -43,7 +54,7 @@ VideoDecoder *video_decoder_init(const char *url);
 *
 * Function also takes in a callback to perform operations on decoded frames
 */
-int decode(VideoDecoder *decoder, FrameProcessor processor, void *user_data);
+int decode(VideoDecoder *decoder, FrameProcessor processor, ProcessingContext *ctx);
 
 /**
  * Closes the video decoder and frees all resources.

@@ -22,6 +22,9 @@ include_directories(${FFMPEG_INCLUDE_DIRS})
 link_directories(${FFMPEG_LIBRARY_DIRS})
 add_definitions(${FFMPEG_CFLAGS_OTHER})
 
+##  SDL2
+find_package(SDL2 REQUIRED)
+include_directories(${SDL2_INCLUDE_DIRS})
 
 add_library(microlog STATIC
         libs/microlog/microlog.c
@@ -35,5 +38,6 @@ add_executable(VLC_Clone main.c)
 
 target_link_libraries(VLC_Clone PRIVATE
         ${FFMPEG_LIBRARIES}
+        ${SDL2_LIBRARIES}
         microlog
         decoders)
