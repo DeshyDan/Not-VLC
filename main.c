@@ -8,31 +8,6 @@
 #include <SDL.h>
 #include <SDL_thread.h>
 
-void save_frames_as_ppm(AVFrame *frame, void *user_data) {
-    static int frame_count = 0;
-    char filename[32];
-
-
-    sprintf(filename, "../out/ppm/frame%d.ppm", frame_count++);
-    FILE *file = fopen(filename, "wb");
-    if (file == NULL) {
-        log_error("Could not open file %s", filename);
-        return;
-    }
-
-    // Write header
-    fprintf(file, "P6\n%d %d\n255\n", frame->width, frame->height);
-    log_info("Wrote header for frame %d", frame_count);
-
-    // Write pixel data
-    for (int y = 0; y < frame->height; y++) {
-        fwrite(frame->data[0] + y * frame->linesize[0], 1, frame->width * 3, file);
-    }
-
-    log_info("Saved frame %d to %s", frame_count, filename);
-    fclose(file);
-}
-
 void display_image(ProcessingContext *ctx) {
     void *pixels;
     int pitch;
@@ -128,6 +103,9 @@ int main(void) {
         response = -1;
         goto cleanup;
     }
+
+    // Note: SWS context is for image scaling and format conversions.
+    // Converting from source format to YUV420P to display on the SDL windows
     sws_ctx = sws_getContext(decoder->codec_ctx->width,
                              decoder->codec_ctx->height,
                              decoder->codec_ctx->pix_fmt,

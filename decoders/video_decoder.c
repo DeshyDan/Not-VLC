@@ -19,7 +19,7 @@ static VideoDecoder *video_decoder_alloc() {
     return decoder;
 }
 
-static int find_stream_info(VideoDecoder *decoder) {
+static int find_video_stream(VideoDecoder *decoder) {
     if (avformat_find_stream_info(decoder->fmt_ctx, NULL) < 0) {
         log_error("Could not find stream information");
         return -1;
@@ -128,6 +128,7 @@ VideoDecoder *video_decoder_init(const char *url) {
         return NULL;
     }
 
+    // Opening the video and reading the video file. Info is stored in the AVFormatContext
     if (avformat_open_input(&decoder->fmt_ctx, url, 0, NULL) < 0) {
         log_error("Could not open source file %s", url);
         video_decoder_destroy(decoder);
@@ -136,8 +137,8 @@ VideoDecoder *video_decoder_init(const char *url) {
     log_info("Opened input %s", url);
 
 
-    if (find_stream_info(decoder) < 0) {
-        log_error("Could not get stream information");
+    if (find_video_stream(decoder) < 0) {
+        log_error("Could not get video stream information");
         video_decoder_destroy(decoder);
 
         return NULL;
