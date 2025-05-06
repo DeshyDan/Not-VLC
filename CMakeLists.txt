@@ -31,8 +31,8 @@ add_library(microlog STATIC
         libs/microlog/microlog.h)
 
 add_library(decoders STATIC
-        decoders/video_decoder.c
-        decoders/video_decoder.h)
+        decoders/decoder.c
+        decoders/decoder.h)
 
 add_executable(VLC_Clone main.c)
 

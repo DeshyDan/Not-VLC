@@ -1,4 +1,4 @@
-#include "video_decoder.h"
+#include "decoder.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <libavcodec/avcodec.h>
@@ -13,18 +13,14 @@ static VideoDecoder *video_decoder_alloc() {
         return NULL;
     }
     decoder->fmt_ctx = avformat_alloc_context();
-    decoder->codec_ctx = avcodec_alloc_context3(NULL);
+    decoder->video_codec_ctx = avcodec_alloc_context3(NULL);
     decoder->video_stream_index = -1;
+    decoder->audio_stream_index = -1;
     log_info("Successfully created decoder objects");
     return decoder;
 }
 
 static int find_video_stream(VideoDecoder *decoder) {
-    if (avformat_find_stream_info(decoder->fmt_ctx, NULL) < 0) {
-        log_error("Could not find stream information");
-        return -1;
-    }
-
     // Find video stream
     for (unsigned int i = 0; i < decoder->fmt_ctx->nb_streams; i++) {
         if (decoder->fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
@@ -42,35 +38,79 @@ static int find_video_stream(VideoDecoder *decoder) {
     return 0;
 }
 
-static int setup_codec_context(VideoDecoder *decoder) {
+static int find_audio_stream(VideoDecoder *decoder) {
+    for (unsigned int i = 0; i < decoder->fmt_ctx->nb_streams; i++) {
+        if (decoder->fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
+            decoder->audio_stream_index = i;
+            break;
+        }
+    }
+    if (decoder->audio_stream_index == -1) {
+        log_error("Could not find audio stream");
+        return -1;
+    }
+    return 0;
+}
+
+static int setup_video_codec_context(VideoDecoder *decoder) {
     const AVStream *stream = decoder->fmt_ctx->streams[decoder->video_stream_index];
+    const AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
+    if (!codec) {
+        log_error("Video Codec not found!");
+        return -1;
+    }
+
+    decoder->video_codec_ctx = avcodec_alloc_context3(codec);
+    if (!decoder->video_codec_ctx) {
+        log_error("Failed to allocate video codex context");
+        return -1;
+    }
+
+    if (avcodec_parameters_to_context(decoder->video_codec_ctx, stream->codecpar) < 0) {
+        log_error("Could not copy video codec context");
+        return -1;
+    }
+    log_info("Copied video codex context");
+
+    AVDictionary *opts = NULL;
+    av_dict_set(&opts, "hwaccel", "videotoolbox", 0); // TODO: Seems not be working as expected
+    if (avcodec_open2(decoder->video_codec_ctx, codec, &opts) < 0) {
+        log_error("Failed to initialize video codex context with HW acceleration");
+        av_dict_free(&opts);
+        return -1;
+    }
+    av_dict_free(&opts);
+    log_info("Initialized video codec context");
+
+    return 0;
+}
+
+static int setup_audio_codec_context(VideoDecoder *decoder) {
+    const AVStream *stream = decoder->fmt_ctx->streams[decoder->audio_stream_index];
     const AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
     if (!codec) {
         log_error("Codec not found!");
         return -1;
     }
 
-    decoder->codec_ctx = avcodec_alloc_context3(codec);
-    if (!decoder->codec_ctx) {
-        log_error("Failed to allocated codex context");
+    decoder->audio_codec_context = avcodec_alloc_context3(codec);
+    if (!decoder->audio_codec_context) {
+        log_error("Failed to allocate audio codex context");
         return -1;
     }
 
-    if (avcodec_parameters_to_context(decoder->codec_ctx, stream->codecpar) < 0) {
-        log_error("Could not copy codec context");
+    if (avcodec_parameters_to_context(decoder->audio_codec_context, stream->codecpar) < 0) {
+        log_error("Could not copy audio codec context");
         return -1;
     }
-    log_info("Copied codex context");
+    log_info("Copied audio codex context");
 
-    AVDictionary *opts = NULL;
-    av_dict_set(&opts, "hwaccel", "videotoolbox", 0);
-    if (avcodec_open2(decoder->codec_ctx, codec, &opts) < 0) {
-        log_error("Failed to initialize codex context with HW acceleration");
-        av_dict_free(&opts);
+
+    if (avcodec_open2(decoder->audio_codec_context, codec, NULL) < 0) {
+        log_error("Failed to open audio codex");
         return -1;
     }
-    av_dict_free(&opts);
-    log_info("Initialized codec context");
+    log_info("Initialized audio codec context");
 
     return 0;
 }
@@ -78,8 +118,8 @@ static int setup_codec_context(VideoDecoder *decoder) {
 static int allocate_output_frame(VideoDecoder *decoder, AVFrame *frame, uint8_t **rgb_buffer) {
     // TODO: Dynamically pass in destFomart
     int buffer_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24,
-                                               decoder->codec_ctx->width,
-                                               decoder->codec_ctx->height, 1);
+                                               decoder->video_codec_ctx->width,
+                                               decoder->video_codec_ctx->height, 1);
     *rgb_buffer = av_malloc(buffer_size * sizeof(uint8_t));
     if (!*rgb_buffer) {
         log_error("Failed to allocate RGB buffer");
@@ -87,8 +127,8 @@ static int allocate_output_frame(VideoDecoder *decoder, AVFrame *frame, uint8_t 
     }
 
     if (av_image_fill_arrays(frame->data, frame->linesize, *rgb_buffer,
-                             AV_PIX_FMT_RGB24, decoder->codec_ctx->width,
-                             decoder->codec_ctx->height, 1) < 0) {
+                             AV_PIX_FMT_RGB24, decoder->video_codec_ctx->width,
+                             decoder->video_codec_ctx->height, 1) < 0) {
         log_error("Failed to setup output frame");
         av_free(*rgb_buffer);
         *rgb_buffer = NULL;
@@ -105,7 +145,7 @@ static void convert_frames_to_rgb(VideoDecoder *decoder, struct SwsContext *sws_
               (uint8_t const * const *) frame->data,
               frame->linesize,
               0,
-              decoder->codec_ctx->height,
+              decoder->video_codec_ctx->height,
               frame_rgb->data,
               frame_rgb->linesize);
 }
@@ -121,7 +161,7 @@ static void cleanup_resources(AVFrame *frame, AVFrame *frame_rgb,
     log_debug("Cleaned up decoder resources");
 }
 
-VideoDecoder *video_decoder_init(const char *url) {
+VideoDecoder *decoder_init(const char *url) {
     VideoDecoder *decoder = video_decoder_alloc();
 
     if (!decoder) {
@@ -131,26 +171,60 @@ VideoDecoder *video_decoder_init(const char *url) {
     // Opening the video and reading the video file. Info is stored in the AVFormatContext
     if (avformat_open_input(&decoder->fmt_ctx, url, 0, NULL) < 0) {
         log_error("Could not open source file %s", url);
-        video_decoder_destroy(decoder);
+        decoder_destroy(decoder);
         return NULL;
     }
     log_info("Opened input %s", url);
 
-
+    if (avformat_find_stream_info(decoder->fmt_ctx, NULL) < 0) {
+        log_error("Could not find stream information");
+        decoder_destroy(decoder);
+        return NULL;
+    }
     if (find_video_stream(decoder) < 0) {
         log_error("Could not get video stream information");
-        video_decoder_destroy(decoder);
+        decoder_destroy(decoder);
 
         return NULL;
     }
 
-    if (setup_codec_context(decoder) < 0) {
+    if (find_audio_stream(decoder) < 0) {
+        log_error("Could not get audio stream information");
+        decoder_destroy(decoder);
+        return NULL;
+    }
+
+    if (setup_video_codec_context(decoder) < 0) {
         log_error("Could not setup codec context");
-        video_decoder_destroy(decoder);
+        decoder_destroy(decoder);
+        return NULL;
+    }
+
+    if (setup_audio_codec_context(decoder) < 0) {
+        log_error("Could not setup audio codec context");
+        decoder_destroy(decoder);
         return NULL;
     }
 
     return decoder;
+}
+
+int packet_queue_put(PacketQueue *queue, AVPacket *packet) {
+    AVPacket *pkt_copy = av_packet_alloc();
+    if (av_packet_ref(pkt_copy, packet) < 0) {
+        av_packet_free(&pkt_copy);
+        return -1;
+    }
+
+    SDL_LockMutex(queue->mutex);
+
+    av_fifo_write(queue->packet_fifo, &pkt_copy, 1);
+    queue->nb_packets++;
+    queue->size += pkt_copy->size;
+
+    SDL_CondSignal(queue->cond); // Wake up packet_queue_get()
+    SDL_UnlockMutex(queue->mutex);
+    return 0;
 }
 
 int decode(VideoDecoder *decoder, FrameProcessor processor, ProcessingContext *ctx) {
@@ -188,20 +262,24 @@ int decode(VideoDecoder *decoder, FrameProcessor processor, ProcessingContext *c
         if (packet->stream_index == decoder->video_stream_index) {
             log_debug("Got video packet with size %d", packet->size);
             // Send packet for decoding
-            if (avcodec_send_packet(decoder->codec_ctx, packet) < 0) {
+            if (avcodec_send_packet(decoder->video_codec_ctx, packet) < 0) {
                 log_error("Failed to send packet for decoding");
                 av_packet_unref(packet);
                 continue;
             }
 
             // Get decoded frame
-            while (avcodec_receive_frame(decoder->codec_ctx, frame) >= 0) {
+            while (avcodec_receive_frame(decoder->video_codec_ctx, frame) >= 0) {
                 //  convert_frames_to_rgb(decoder, sws_ctx, frame, frame_rgb);
 
                 ctx->frame_count++;
 
                 processor(ctx);
             }
+        } else if (packet->stream_index == decoder->audio_stream_index) {
+            log_debug("Got audio packet with size %d", packet->size);
+            // Put the packet in the queue for processing
+            packet_queue_put(&ctx->audio_queue, packet);
         }
         av_packet_unref(packet);
     }
@@ -211,12 +289,12 @@ cleanup:
     return response;
 }
 
-void video_decoder_destroy(VideoDecoder *decoder) {
+void decoder_destroy(VideoDecoder *decoder) {
     if (!decoder) return;
 
-    if (decoder->codec_ctx) {
-        avcodec_free_context(&decoder->codec_ctx);
-        decoder->codec_ctx = NULL;
+    if (decoder->video_codec_ctx) {
+        avcodec_free_context(&decoder->video_codec_ctx);
+        decoder->video_codec_ctx = NULL;
         log_info("Freed codec context");
     }
 
