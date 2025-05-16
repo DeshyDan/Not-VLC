@@ -1,4 +1,8 @@
 #include "decoder.h"
+
+#include <SDL_audio.h>
+#include <SDL_events.h>
+#include <SDL_timer.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <libavcodec/avcodec.h>
@@ -7,207 +11,9 @@
 #include <libavutil/imgutils.h>
 #include "../libs/microlog/microlog.h"
 
-static VideoDecoder *video_decoder_alloc() {
-    VideoDecoder *decoder = malloc(sizeof(VideoDecoder));
-    if (!decoder) {
-        return NULL;
-    }
-    decoder->fmt_ctx = avformat_alloc_context();
-    decoder->video_codec_ctx = avcodec_alloc_context3(NULL);
-    decoder->video_stream_index = -1;
-    decoder->audio_stream_index = -1;
-    log_info("Successfully created decoder objects");
-    return decoder;
-}
+#define MAX_AUDIO_QUEUE_SIZE (5 * 16 * 1024)
+#define MAX_VIDEO_QUEUE_SIZE (5 * 256 * 1024)
 
-static int find_video_stream(VideoDecoder *decoder) {
-    // Find video stream
-    for (unsigned int i = 0; i < decoder->fmt_ctx->nb_streams; i++) {
-        if (decoder->fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            decoder->video_stream_index = i;
-            break;
-        }
-    }
-
-    if (decoder->video_stream_index == -1) {
-        log_error("Could not find video stream");
-        return -1;
-    }
-
-    log_info("Found video stream: %d", decoder->video_stream_index);
-    return 0;
-}
-
-static int find_audio_stream(VideoDecoder *decoder) {
-    for (unsigned int i = 0; i < decoder->fmt_ctx->nb_streams; i++) {
-        if (decoder->fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO) {
-            decoder->audio_stream_index = i;
-            break;
-        }
-    }
-    if (decoder->audio_stream_index == -1) {
-        log_error("Could not find audio stream");
-        return -1;
-    }
-    return 0;
-}
-
-static int setup_video_codec_context(VideoDecoder *decoder) {
-    const AVStream *stream = decoder->fmt_ctx->streams[decoder->video_stream_index];
-    const AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
-    if (!codec) {
-        log_error("Video Codec not found!");
-        return -1;
-    }
-
-    decoder->video_codec_ctx = avcodec_alloc_context3(codec);
-    if (!decoder->video_codec_ctx) {
-        log_error("Failed to allocate video codex context");
-        return -1;
-    }
-
-    if (avcodec_parameters_to_context(decoder->video_codec_ctx, stream->codecpar) < 0) {
-        log_error("Could not copy video codec context");
-        return -1;
-    }
-    log_info("Copied video codex context");
-
-    AVDictionary *opts = NULL;
-    av_dict_set(&opts, "hwaccel", "videotoolbox", 0); // TODO: Seems not be working as expected
-    if (avcodec_open2(decoder->video_codec_ctx, codec, &opts) < 0) {
-        log_error("Failed to initialize video codex context with HW acceleration");
-        av_dict_free(&opts);
-        return -1;
-    }
-    av_dict_free(&opts);
-    log_info("Initialized video codec context");
-
-    return 0;
-}
-
-static int setup_audio_codec_context(VideoDecoder *decoder) {
-    const AVStream *stream = decoder->fmt_ctx->streams[decoder->audio_stream_index];
-    const AVCodec *codec = avcodec_find_decoder(stream->codecpar->codec_id);
-    if (!codec) {
-        log_error("Codec not found!");
-        return -1;
-    }
-
-    decoder->audio_codec_context = avcodec_alloc_context3(codec);
-    if (!decoder->audio_codec_context) {
-        log_error("Failed to allocate audio codex context");
-        return -1;
-    }
-
-    if (avcodec_parameters_to_context(decoder->audio_codec_context, stream->codecpar) < 0) {
-        log_error("Could not copy audio codec context");
-        return -1;
-    }
-    log_info("Copied audio codex context");
-
-
-    if (avcodec_open2(decoder->audio_codec_context, codec, NULL) < 0) {
-        log_error("Failed to open audio codex");
-        return -1;
-    }
-    log_info("Initialized audio codec context");
-
-    return 0;
-}
-
-static int allocate_output_frame(VideoDecoder *decoder, AVFrame *frame, uint8_t **rgb_buffer) {
-    // TODO: Dynamically pass in destFomart
-    int buffer_size = av_image_get_buffer_size(AV_PIX_FMT_RGB24,
-                                               decoder->video_codec_ctx->width,
-                                               decoder->video_codec_ctx->height, 1);
-    *rgb_buffer = av_malloc(buffer_size * sizeof(uint8_t));
-    if (!*rgb_buffer) {
-        log_error("Failed to allocate RGB buffer");
-        return -1;
-    }
-
-    if (av_image_fill_arrays(frame->data, frame->linesize, *rgb_buffer,
-                             AV_PIX_FMT_RGB24, decoder->video_codec_ctx->width,
-                             decoder->video_codec_ctx->height, 1) < 0) {
-        log_error("Failed to setup output frame");
-        av_free(*rgb_buffer);
-        *rgb_buffer = NULL;
-        return -1;
-    }
-
-    log_debug("Allocated output frame buffer (%d bytes)", buffer_size);
-    return 0;
-}
-
-static void convert_frames_to_rgb(VideoDecoder *decoder, struct SwsContext *sws_ctx, AVFrame *frame,
-                                  AVFrame *frame_rgb) {
-    sws_scale(sws_ctx,
-              (uint8_t const * const *) frame->data,
-              frame->linesize,
-              0,
-              decoder->video_codec_ctx->height,
-              frame_rgb->data,
-              frame_rgb->linesize);
-}
-
-static void cleanup_resources(AVFrame *frame, AVFrame *frame_rgb,
-                              uint8_t *buffer, AVPacket *packet,
-                              struct SwsContext *sws_ctx) {
-    if (frame) av_frame_free(&frame);
-    if (frame_rgb) av_frame_free(&frame_rgb);
-    // if (buffer) av_free(buffer);
-    if (packet) av_packet_free(&packet);
-
-    log_debug("Cleaned up decoder resources");
-}
-
-VideoDecoder *decoder_init(const char *url) {
-    VideoDecoder *decoder = video_decoder_alloc();
-
-    if (!decoder) {
-        return NULL;
-    }
-
-    // Opening the video and reading the video file. Info is stored in the AVFormatContext
-    if (avformat_open_input(&decoder->fmt_ctx, url, 0, NULL) < 0) {
-        log_error("Could not open source file %s", url);
-        decoder_destroy(decoder);
-        return NULL;
-    }
-    log_info("Opened input %s", url);
-
-    if (avformat_find_stream_info(decoder->fmt_ctx, NULL) < 0) {
-        log_error("Could not find stream information");
-        decoder_destroy(decoder);
-        return NULL;
-    }
-    if (find_video_stream(decoder) < 0) {
-        log_error("Could not get video stream information");
-        decoder_destroy(decoder);
-
-        return NULL;
-    }
-
-    if (find_audio_stream(decoder) < 0) {
-        log_error("Could not get audio stream information");
-        decoder_destroy(decoder);
-        return NULL;
-    }
-
-    if (setup_video_codec_context(decoder) < 0) {
-        log_error("Could not setup codec context");
-        decoder_destroy(decoder);
-        return NULL;
-    }
-
-    if (setup_audio_codec_context(decoder) < 0) {
-        log_error("Could not setup audio codec context");
-        decoder_destroy(decoder);
-        return NULL;
-    }
-
-    return decoder;
-}
 
 int packet_queue_put(PacketQueue *queue, AVPacket *packet) {
     AVPacket *pkt_copy = av_packet_alloc();
@@ -224,86 +30,546 @@ int packet_queue_put(PacketQueue *queue, AVPacket *packet) {
 
     SDL_CondSignal(queue->cond); // Wake up packet_queue_get()
     SDL_UnlockMutex(queue->mutex);
+    log_info("Packet queued: %d packets, size: %d", queue->nb_packets, queue->size);
     return 0;
 }
 
-int decode(VideoDecoder *decoder, FrameProcessor processor, ProcessingContext *ctx) {
-    AVFrame *frame = av_frame_alloc();
-    AVFrame *frame_out = av_frame_alloc();
-    uint8_t *rgb_buffer = NULL;
+void packet_queue_init(PacketQueue *queue) {
+    memset(queue, 0, sizeof(PacketQueue));
+    queue->packet_fifo = av_fifo_alloc2(32, sizeof(AVPacket *), AV_FIFO_FLAG_AUTO_GROW);
+    queue->mutex = SDL_CreateMutex();
+    queue->cond = SDL_CreateCond();
+    log_info("Packet queue initialized");
+}
+
+int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
+    AVPacket *pkt = av_packet_alloc();
+    int ret = 0;
+
+    SDL_LockMutex(queue->mutex);
+    while (true) {
+        if (av_fifo_read(queue->packet_fifo, &pkt, 1) >= 0) {
+            queue->nb_packets--;
+            queue->size -= pkt->size;
+            av_packet_move_ref(packet, pkt);
+            av_packet_free(&pkt);
+            ret = 1;
+            break;
+        } else if (!block) {
+            ret = 0;
+            break;
+        } else {
+            SDL_CondWait(queue->cond, queue->mutex);
+        }
+    }
+    SDL_UnlockMutex(queue->mutex);
+    log_info("Packet dequeued: %d packets, size: %d", queue->nb_packets, queue->size);
+    return ret;
+}
+
+static Uint32 sdl_refresh_timer_callback(Uint32 interval, void *user_data) {
+    SDL_Event event;
+    event.type = FF_REFRESH_EVENT;
+    event.user.data1 = user_data;
+    SDL_PushEvent(&event);
+    return 0;
+}
+
+void schedule_refresh(VideoState *video_state, int delay) {
+    log_info("Scheduling refresh with delay: %d", delay);
+    SDL_AddTimer(delay, sdl_refresh_timer_callback, video_state);
+}
+
+int find_streams(VideoState *video_state) {
+    // Find video stream
+    // TODO: Look at what related streams does in depth
+    video_state->video_stream_index = av_find_best_stream(video_state->format_context,
+                                                          AVMEDIA_TYPE_VIDEO,
+                                                          AVMEDIA_TYPE_VIDEO,
+                                                          -1,
+                                                          NULL,
+                                                          0);
+
+    // AUDIO stream
+    video_state->audio_stream_index = av_find_best_stream(video_state->format_context,
+                                                          AVMEDIA_TYPE_AUDIO,
+                                                          AVMEDIA_TYPE_AUDIO,
+                                                          AVMEDIA_TYPE_VIDEO,
+                                                          NULL,
+                                                          0);
+
+    if (video_state->audio_stream_index == -1 || video_state->video_stream_index == -1) {
+        return -1;
+    }
+
+    log_info("Found video stream at %d", video_state->video_stream_index);
+    log_info("Found audio stream at %d", video_state->audio_stream_index);
+
+    return 0;
+}
+
+void alloc_picture(void *userdata) {
+    VideoState *video_state = (VideoState *) userdata;
+    VideoPicture *video_picture;
+
+    video_picture = &video_state->picture_queue[video_state->picture_queue_write_index];
+
+    if (video_state->video_texture) {
+        SDL_DestroyTexture(video_state->video_texture);
+    }
+
+    SDL_LockMutex(video_state->screen_mutex);
+    // Allocate a place to put YUV image
+    video_state->video_texture = SDL_CreateTexture(video_state->renderer,
+                                                   SDL_PIXELFORMAT_IYUV,
+                                                   SDL_TEXTUREACCESS_STREAMING,
+                                                   video_state->video_stream->codecpar->width,
+                                                   video_state->video_stream->codecpar->height);
+
+    SDL_UnlockMutex(video_state->screen_mutex);
+
+    video_picture->width = video_state->video_stream->codecpar->width;
+    video_picture->height = video_state->video_stream->codecpar->height;
+    video_picture->allocated = 1;
+
+    log_info("Allocated video picture: %dx%d", video_picture->width, video_picture->height);
+
+    SDL_SetTextureBlendMode(video_state->video_texture, SDL_BLENDMODE_NONE);
+}
+
+int queue_picture(VideoState *video_state, AVFrame *frame) {
+    VideoPicture *video_picture;
+
+    // Inorder to write to the queue, we need to wait for the buffer to clear out so we have space to store
+    // the VideoPicture.
+
+    SDL_LockMutex(video_state->picture_queue_mutex);
+    while (video_state->picture_queue_size >= VIDEO_PICTURE_QUEUE_SIZE && !video_state->quit) {
+        log_warn("Picture queue full, waiting for space");
+        SDL_CondWait(video_state->picture_queue_cond, video_state->picture_queue_mutex);
+    }
+    SDL_UnlockMutex(video_state->picture_queue_mutex);
+
+
+    if (video_state->quit) {
+        return -1;
+    }
+
+    video_picture = &video_state->picture_queue[video_state->picture_queue_write_index];
+
+    // allocate or resize the buffer
+    if (!video_state->video_texture ||
+        video_picture->width != video_state->video_codec_ctx->width ||
+        video_picture->height != video_state->video_codec_ctx->height) {
+        log_info("Allocating new video picture buffer");
+        video_picture->allocated = 0;
+        alloc_picture(video_state);
+        if (video_state->quit) {
+            return -1;
+        }
+    }
+
+    // Now we convert the image into YUV format that SDL can use
+    if (video_state->video_texture) {
+        void *pixels;
+        int pitch;
+
+        if (SDL_LockTexture(video_state->video_texture, NULL, &pixels, &pitch) < 0) {
+            log_error("Could not lock texture");
+            return -1;
+        }
+        // Prepare destination planes (YUV format)
+        // Since YUV420P uses 3 channels , 3 planes hav to be set
+        uint8_t *dst_planes[3];
+        dst_planes[0] = pixels; // Y plane
+        dst_planes[1] = pixels + video_state->video_codec_ctx->height * pitch; // U plane
+        dst_planes[2] = dst_planes[1] + (video_state->video_codec_ctx->height * pitch / 4); // V plane
+
+        int dst_linesize[3] = {pitch, pitch / 2, pitch / 2};
+
+        // Convert the image into YUV format that SDL uses
+        sws_scale(video_state->sws_ctx,
+                  (uint8_t const * const *) frame->data,
+                  frame->linesize,
+                  0,
+                  frame->height,
+                  dst_planes,
+                  dst_linesize);
+        log_info("Converted image to YUV format");
+
+        SDL_UnlockTexture(video_state->video_texture);
+
+        if (++video_state->picture_queue_write_index == VIDEO_PICTURE_QUEUE_SIZE) {
+            video_state->picture_queue_write_index = 0;
+        }
+        SDL_LockMutex(video_state->picture_queue_mutex);
+        video_state->picture_queue_size++;
+        SDL_UnlockMutex(video_state->picture_queue_mutex);
+    }
+    return 0;
+}
+
+int video_thread(void *arg) {
+    VideoState *video_state = (VideoState *) arg;
     AVPacket *packet = av_packet_alloc();
-    struct SwsContext *sws_ctx = ctx->sws_ctx;
-    int response = 0;
+    AVFrame *frame = av_frame_alloc();
 
-    if (!frame || !frame_out || !packet) {
-        log_error("Failed to allocate frames or packet");
-        response = -1;
-        goto cleanup;
-    }
+    while (true) {
+        if (packet_queue_get(&video_state->video_packet_queue, packet, 1) < 0) {
+            break;
+        }
+        //send packet for decoding
+        if (avcodec_send_packet(video_state->video_codec_ctx, packet) < 0) {
+            log_error("Failed to send packet for decoding");
+            av_packet_unref(packet);
+            continue;
+        }
 
-    ctx->frame_out = frame;
-    ctx->decoder = decoder;
-
-    // // Allocate RGB buffer and frame
-    // if (allocate_output_frame(decoder, frame_out, &rgb_buffer) < 0) {
-    //     log_error("Could not allocate RGB buffer");
-    //     response = -1;
-    //     goto cleanup;
-    // }
-
-    if (!sws_ctx) {
-        log_error("Failed to create sws context");
-        response = -1;
-        goto cleanup;
-    }
-    log_info("Created sws context");
-
-    while (av_read_frame(decoder->fmt_ctx, packet) >= 0) {
-        if (packet->stream_index == decoder->video_stream_index) {
-            log_debug("Got video packet with size %d", packet->size);
-            // Send packet for decoding
-            if (avcodec_send_packet(decoder->video_codec_ctx, packet) < 0) {
-                log_error("Failed to send packet for decoding");
-                av_packet_unref(packet);
-                continue;
+        // Get decoded frame.
+        if (avcodec_receive_frame(video_state->video_codec_ctx, frame) < 0) {
+            log_error("Failed to get a frame");
+            // TODO: What do we do when we fail to get a frame???
+            // Just continue for now and hope everything works :D
+            continue;
+        } else {
+            if (queue_picture(video_state, frame) < 0) {
+                break;
             }
-
-            // Get decoded frame
-            while (avcodec_receive_frame(decoder->video_codec_ctx, frame) >= 0) {
-                //  convert_frames_to_rgb(decoder, sws_ctx, frame, frame_rgb);
-
-                ctx->frame_count++;
-
-                processor(ctx);
-            }
-        } else if (packet->stream_index == decoder->audio_stream_index) {
-            log_debug("Got audio packet with size %d", packet->size);
-            // Put the packet in the queue for processing
-            packet_queue_put(&ctx->audio_queue, packet);
         }
         av_packet_unref(packet);
     }
-
-cleanup:
-    cleanup_resources(frame, frame_out, rgb_buffer, packet, sws_ctx);
-    return response;
+    av_free(frame);
+    av_free(packet);
+    return 0;
 }
 
-void decoder_destroy(VideoDecoder *decoder) {
-    if (!decoder) return;
+int audio_decode_frame(VideoState *video_state) {
+    int data_size = 0;
+    AVPacket *packet = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
 
-    if (decoder->video_codec_ctx) {
-        avcodec_free_context(&decoder->video_codec_ctx);
-        decoder->video_codec_ctx = NULL;
-        log_info("Freed codec context");
+    while (1) {
+        if (packet_queue_get(&video_state->audio_packet_queue, packet, 1) <= 0) {
+            log_warn("Nothing in the audio queue");
+            av_frame_free(&frame);
+            av_packet_free(&packet);
+            return -1;
+        }
+
+        if (avcodec_send_packet(video_state->audio_codec_context, packet) < 0) {
+            av_packet_unref(&packet);
+            continue;
+        }
+
+        if (avcodec_receive_frame(video_state->audio_codec_context, frame) < 0) {
+            log_error("Failed to receive frame");
+            av_packet_unref(&packet);
+            continue;
+        }
+
+        data_size = av_samples_get_buffer_size(
+            NULL,
+            frame->ch_layout.nb_channels,
+            frame->nb_samples,
+            frame->format,
+            1
+        );
+
+        if (data_size >= sizeof(video_state->audio_buffer)) {
+            log_error("Audio buffer too small");
+            av_frame_free(&frame);
+            av_packet_free(&packet);
+            return -1;
+        }
+
+        memcpy(video_state->audio_buffer, frame->data[0], data_size);
+        av_frame_free(&frame);
+        av_packet_free(&packet);
+        log_info("Decoded %d bytes of audio data", data_size);
+        return data_size;
+    }
+}
+
+void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
+    VideoState *video_state = (VideoState *) userdata;
+    int audio_size;
+    int len1;
+
+    while (len > 0) {
+        if (video_state->audio_buffer_index >= video_state->audio_buffer_size) {
+            audio_size = audio_decode_frame(video_state);
+            if (audio_size < 0) {
+                video_state->audio_buffer_size = 1024;
+                memset(video_state->audio_buffer, 0, video_state->audio_buffer_size);
+            } else {
+                video_state->audio_buffer_size = audio_size;
+            }
+            video_state->audio_buffer_index = 0;
+        }
+        len1 = video_state->audio_buffer_size - video_state->audio_buffer_index;
+        if (len1 > len) {
+            len1 = len;
+        }
+        memcpy(stream, (uint8_t *) video_state->audio_buffer + video_state->audio_buffer_index, len1);
+        len -= len1;
+        stream += len1;
+        video_state->audio_buffer_index += len1;
+    }
+}
+
+/** We'll find our codec decoders, setup audio options and launch the audio and video decoding threads **/
+int stream_component_open(VideoState *video_state, int stream_index) {
+    if (stream_index < 0 || stream_index >= video_state->format_context->nb_streams) {
+        return -1;
     }
 
-    if (decoder->fmt_ctx) {
-        avformat_close_input(&decoder->fmt_ctx);
-        decoder->fmt_ctx = NULL;
+    SDL_AudioSpec wanted_spec;
+    SDL_AudioSpec spec;
+    int ret = 0;
+
+    const AVCodec *codec = avcodec_find_decoder(video_state->format_context->streams[stream_index]->codecpar->codec_id);
+
+    if (!codec) {
+        log_error("Could not find codec");
+        return -1;
+    }
+    AVCodecContext *codec_context = avcodec_alloc_context3(codec);
+
+    if (avcodec_parameters_to_context(codec_context, video_state->format_context->streams[stream_index]->codecpar) <
+        0) {
+        log_error("Could not copy codec context");
+        ret = -1;
+        goto cleanup;
+    }
+    log_info("Copied video codex context");
+    if (avcodec_open2(codec_context, codec, NULL) < 0) {
+        log_error("Failed to open decoder");
+        ret = -1;
+        goto cleanup;
+    }
+    switch (codec_context->codec_type) {
+        case AVMEDIA_TYPE_AUDIO:
+            wanted_spec.freq = codec_context->sample_rate;
+            wanted_spec.format = AUDIO_S16SYS;
+            wanted_spec.channels = codec_context->ch_layout.nb_channels;
+            wanted_spec.silence = 0;
+            wanted_spec.callback = sdl_audio_callback;
+            wanted_spec.userdata = video_state;
+            wanted_spec.samples = SDL_AUDIO_BUFFER_SIZE;
+
+            if (SDL_OpenAudio(&wanted_spec, &spec) < 0) {
+                log_error("Failed to open SDL audio");
+                ret = -1;
+                goto cleanup;
+            }
+
+            video_state->audio_stream = video_state->format_context->streams[stream_index];
+            video_state->audio_codec_context = codec_context;
+            video_state->audio_buffer_size = 0;
+            video_state->audio_buffer_index = 0;
+
+            memset(&video_state->audio_packet, 0, sizeof(video_state->audio_packet));
+
+            packet_queue_init(&video_state->audio_packet_queue);
+        // video_state->audio_thread = SDL_CreateThread(audio_thread, "audio_decoder", video_state);
+            log_info("Initialized audio packet queue");
+            SDL_PauseAudio(0);
+            break;
+        case AVMEDIA_TYPE_VIDEO:
+            video_state->video_stream_index = stream_index;
+            video_state->video_stream = video_state->format_context->streams[stream_index];
+            video_state->video_codec_ctx = codec_context;
+            packet_queue_init(&video_state->video_packet_queue);
+            log_info("Initialized video packet queue");
+            video_state->video_thread = SDL_CreateThread(video_thread, "video_decoder", video_state);
+            video_state->sws_ctx = sws_getContext(video_state->video_codec_ctx->width,
+                                                  video_state->video_codec_ctx->height,
+                                                  video_state->video_codec_ctx->pix_fmt,
+                                                  video_state->video_codec_ctx->width,
+                                                  video_state->video_codec_ctx->height,
+                                                  AV_PIX_FMT_YUV420P,
+                                                  SWS_BILINEAR, NULL, NULL, NULL
+            );
+
+            break;
+        default:
+            log_error("Unsupported codec type");
+            ret = -1;
+            goto cleanup;
+    }
+
+
+    return ret;
+cleanup:
+    if (codec_context) {
+        avcodec_free_context(&codec_context);
+    }
+
+    return ret;
+}
+
+void video_display(VideoState *video_state) {
+    if (!video_state || !video_state->video_texture || !video_state->video_stream) {
+        log_error("Invalid video state or missing components");
+        return;
+    }
+
+    VideoPicture *vp = &video_state->picture_queue[video_state->picture_queue_read_index];
+    if (!vp->allocated) {
+        log_warn("No frame available to display");
+        return;
+    }
+
+    // Calculate display aspect ratio
+    AVRational sar = video_state->video_stream->codecpar->sample_aspect_ratio;
+    float aspect_ratio = (float) vp->width / (float) vp->height;
+    if (sar.num != 0) {
+        aspect_ratio = av_q2d(sar) * vp->width / vp->height;
+    }
+
+    int render_width;
+    int render_height;
+    SDL_GetRendererOutputSize(video_state->renderer, &render_width, &render_height);
+
+    // Calculate target dimensions maintaining aspect ratio
+    int width = render_height * aspect_ratio;
+    int height = render_height;
+
+    if (width > render_width) {
+        width = render_width;
+        height = width / aspect_ratio;
+    }
+
+    int x = (render_width - width) / 2;
+    int y = (render_height - height) / 2;
+
+    SDL_Rect rect = {x, y, width, height};
+
+    SDL_LockMutex(video_state->screen_mutex);
+    SDL_RenderClear(video_state->renderer);
+    SDL_RenderCopy(video_state->renderer, video_state->video_texture, NULL, &rect);
+    SDL_RenderPresent(video_state->renderer);
+    SDL_UnlockMutex(video_state->screen_mutex);
+}
+
+void video_refresh_timer(void *userdata) {
+    VideoState *video_state = (VideoState *) userdata;
+    VideoPicture *video_picture;
+
+    if (video_state->video_stream) {
+        // Pull from the queue when we have something in the queue and then set timer so we display the next video frame
+        //
+        if (video_state->picture_queue_size == 0) {
+            schedule_refresh(video_state, 1);
+        } else {
+            video_picture = &video_state->picture_queue[video_state->picture_queue_read_index];
+
+            schedule_refresh(video_state, 80);
+            video_display(video_state);
+
+            // update queue for the next picture
+            if (++video_state->picture_queue_read_index == VIDEO_PICTURE_QUEUE_SIZE) {
+                video_state->picture_queue_read_index = 0;
+            }
+
+            SDL_LockMutex(video_state->picture_queue_mutex);
+            video_state->picture_queue_size--;
+            SDL_CondSignal(video_state->picture_queue_cond);
+            SDL_UnlockMutex(video_state->picture_queue_mutex);
+        }
+    } else {
+        schedule_refresh(video_state, 100);
+    }
+}
+
+int decode(void *userdata) {
+    int ret = 0;
+
+    VideoState *video_state = (VideoState *) userdata;
+    video_state->format_context = avformat_alloc_context();
+    AVPacket *packet = av_packet_alloc();
+
+    video_state->audio_stream_index = -1;
+    video_state->video_stream_index = -1;
+
+    // Opening the video and reading the video file. Info is stored in the AVFormatContext
+    if (avformat_open_input(&video_state->format_context, video_state->URL, 0, NULL) < 0) {
+        log_error("Could not open source file %s", video_state->URL);
+        ret = -1;
+        goto cleanup;
+    }
+
+    // Retrieve stream information
+    if (avformat_find_stream_info(video_state->format_context, NULL) < 0) {
+        log_error("Could not find stream information");
+        ret = -1;
+        goto cleanup;
+    }
+
+    // Let's see what is in there
+    av_dump_format(video_state->format_context, 0, video_state->URL, 0);
+
+    if (find_streams(video_state) < 0) {
+        log_error("Could not find streams from files");
+        ret = -1;
+        goto cleanup;
+    }
+
+    stream_component_open(video_state, video_state->video_stream_index);
+    log_info("Opened video stream");
+    stream_component_open(video_state, video_state->audio_stream_index);
+    log_info("Opened audio stream");
+
+    if (video_state->audio_stream < 0 || video_state->video_stream < 0) {
+        log_info("Could not initialize streams");
+        ret = -11;
+        goto cleanup;
+    }
+
+    while (true) {
+        if (video_state->quit) {
+            break;
+        }
+
+        if (video_state->audio_packet_queue.size > MAX_AUDIO_QUEUE_SIZE ||
+            video_state->video_packet_queue.size > MAX_VIDEO_QUEUE_SIZE) {
+            SDL_Delay(10);
+            continue;
+        }
+
+        if (av_read_frame(video_state->format_context, packet) < 0) {
+            if (video_state->format_context->pb->error == 0) {
+                SDL_Delay(100);
+                continue;
+            } else {
+                break;
+            }
+        }
+
+        if (packet->stream_index == video_state->video_stream_index) {
+            packet_queue_put(&video_state->video_packet_queue, packet);
+            log_info("Added packet to video queue");
+        } else if (packet->stream_index == video_state->audio_stream_index) {
+            packet_queue_put(&video_state->audio_packet_queue, packet);
+            log_info("Added packet to audio queue");
+        } else {
+            av_packet_free(&packet);
+        }
+    }
+
+
+    return ret;
+
+cleanup:
+    if (video_state->format_context) {
+        avformat_close_input(&video_state->format_context);
         log_info("Closed input streams");
     }
-
-    free(decoder);
-    log_info("Destroyed video decoder");
+    if (1) {
+        SDL_Event event;
+        event.type = FF_QUIT_EVENT;
+        event.user.data1 = video_state;
+        SDL_PushEvent(&event);
+    }
+    return ret;
 }

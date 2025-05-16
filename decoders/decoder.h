@@ -7,29 +7,16 @@
 
 #include <SDL_mutex.h>
 #include <SDL_render.h>
+#include <SDL_thread.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/fifo.h>
+#define SDL_AUDIO_BUFFER_SIZE 1024
+#define MAX_AUDIO_FRAME_SIZE 192000
+#define VIDEO_PICTURE_QUEUE_SIZE 1
+#define FF_REFRESH_EVENT (SDL_USEREVENT)
+#define FF_QUIT_EVENT (SDL_USEREVENT + 1)
 
-
-typedef struct VideoDecoder {
-    /**
-     * Exports all information about the file being read or written
-     */
-    AVFormatContext *fmt_ctx;
-    /**
-     * Stores everything related to the codex
-     */
-    AVCodecContext *video_codec_ctx;
-
-    AVCodecContext *audio_codec_ctx_original;
-    AVCodecContext *audio_codec_context;
-    /**
-     * The index of the video stream in the format context
-     */
-    int video_stream_index;
-    int audio_stream_index;
-} VideoDecoder;
 
 typedef struct PacketQueue {
     AVFifo *packet_fifo;
@@ -39,38 +26,62 @@ typedef struct PacketQueue {
     SDL_cond *cond;
 } PacketQueue;
 
-typedef struct ProcessingContext {
-    VideoDecoder *decoder;
-    AVFrame *frame_out;
-    SDL_Texture *texture;
-    SDL_Renderer *renderer;
+typedef struct VideoPicture {
+    int width;
+    int height;
+    int allocated;
+} VideoPicture;
+
+typedef struct VideoState {
+    AVFormatContext *format_context;
+
+    char *URL;
+
+    int video_stream_index;
+    int audio_stream_index;
+
+    AVStream *audio_stream;
+    AVCodecContext *audio_codec_context;
+    PacketQueue audio_packet_queue;
+    uint8_t audio_buffer[(MAX_AUDIO_FRAME_SIZE * 3) / 2];
+    unsigned int audio_buffer_size;
+    unsigned int audio_buffer_index;
+    AVPacket audio_packet;
+    uint8_t audio_packet_data;
+    uint8_t audio_packet_size;
+    AVStream *video_stream;
     struct SwsContext *sws_ctx;
-    int frame_count;
-    PacketQueue audio_queue;
-} ProcessingContext;
 
-typedef void (*FrameProcessor)(ProcessingContext *ctx);
+    VideoPicture picture_queue[VIDEO_PICTURE_QUEUE_SIZE];
+    AVCodecContext *video_codec_ctx;
+    PacketQueue video_packet_queue;
 
-/**
- * Initializes a decoder with the given URL. Objects returned contains all context
- * about the video and audio stream.
- * @param url URL of stream to open
- * @return VideoDecoder objects
- * If error occurs, null is returned
- */
-VideoDecoder *decoder_init(const char *url);
+    int picture_queue_size;
+    int picture_queue_read_index;
+    int picture_queue_write_index;
+    SDL_mutex *picture_queue_mutex;
+    SDL_cond *picture_queue_cond;
+
+    SDL_Thread *parse_thread;
+    SDL_Thread *video_thread;
+    SDL_Thread *audio_thread;
+
+    SDL_Texture *video_texture;
+    SDL_Window *window;
+    SDL_Renderer *renderer;
+    int quit;
+
+    SDL_Surface *screen;
+    SDL_mutex *screen_mutex;
+} VideoState;
 
 
-/**
-*
-* Function also takes in a callback to perform operations on decoded frames
-*/
-int decode(VideoDecoder *decoder, FrameProcessor processor, ProcessingContext *ctx);
+int decode(void *userdata);
 
-/**
- * Closes the decoder and frees all resources.
- * @param decoder Object to destroy
- */
-void decoder_destroy(VideoDecoder *decoder);
 
+void video_display(VideoState *video_state);
+
+void video_refresh_timer(void *userdata);
+
+void schedule_refresh(VideoState *video_state, int delay);
 #endif //VIDEO_DECODER_H
