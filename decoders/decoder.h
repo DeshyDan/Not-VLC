@@ -42,6 +42,7 @@ typedef struct VideoState {
 
     AVStream *audio_stream;
     AVCodecContext *audio_codec_context;
+    struct SwrContext *swr_ctx;
     PacketQueue audio_packet_queue;
     uint8_t audio_buffer[(MAX_AUDIO_FRAME_SIZE * 3) / 2];
     unsigned int audio_buffer_size;

@@ -9,6 +9,9 @@
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/opt.h>
+#include <libswresample/swresample.h>
+#include <libavutil/channel_layout.h>
 #include "../libs/microlog/microlog.h"
 
 #define MAX_AUDIO_QUEUE_SIZE (5 * 16 * 1024)
@@ -247,6 +250,7 @@ int audio_decode_frame(VideoState *video_state) {
     int data_size = 0;
     AVPacket *packet = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
+    uint8_t *audio_buf = NULL;
 
     while (1) {
         if (packet_queue_get(&video_state->audio_packet_queue, packet, 1) <= 0) {
@@ -256,33 +260,54 @@ int audio_decode_frame(VideoState *video_state) {
             return -1;
         }
 
+        log_info("Sending packet for decoding");
         if (avcodec_send_packet(video_state->audio_codec_context, packet) < 0) {
-            av_packet_unref(&packet);
+            log_warn("Failed to send packet for decoding");
+            av_packet_unref(packet);
             continue;
         }
 
+
+        log_info("Receiving frame from decoder");
         if (avcodec_receive_frame(video_state->audio_codec_context, frame) < 0) {
             log_error("Failed to receive frame");
-            av_packet_unref(&packet);
+            av_packet_unref(packet);
             continue;
         }
 
-        data_size = av_samples_get_buffer_size(
-            NULL,
-            frame->ch_layout.nb_channels,
-            frame->nb_samples,
-            frame->format,
-            1
+        // Resample audio to S16 format
+        int out_samples = av_rescale_rnd(
+            swr_get_delay(video_state->swr_ctx, frame->sample_rate) + frame->nb_samples,
+            frame->sample_rate,
+            frame->sample_rate,
+            AV_ROUND_UP
         );
+        av_samples_alloc(&audio_buf,
+                         NULL,
+                         frame->ch_layout.nb_channels,
+                         out_samples,
+                         AV_SAMPLE_FMT_S16,
+                         0);
 
-        if (data_size >= sizeof(video_state->audio_buffer)) {
+        int converted_samples = swr_convert(
+            video_state->swr_ctx,
+            &audio_buf,
+            out_samples,
+            (const uint8_t **) frame->data,
+            frame->nb_samples
+        );
+        data_size = converted_samples * frame->ch_layout.nb_channels * av_get_bytes_per_sample(AV_SAMPLE_FMT_S16);
+
+        if (data_size > sizeof(video_state->audio_buffer)) {
             log_error("Audio buffer too small");
+            av_freep(&audio_buf);
             av_frame_free(&frame);
             av_packet_free(&packet);
             return -1;
         }
 
-        memcpy(video_state->audio_buffer, frame->data[0], data_size);
+        memcpy(video_state->audio_buffer, audio_buf, data_size);
+        av_freep(&audio_buf);
         av_frame_free(&frame);
         av_packet_free(&packet);
         log_info("Decoded %d bytes of audio data", data_size);
@@ -295,6 +320,11 @@ void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
     int audio_size;
     int len1;
 
+    if (!video_state->swr_ctx || !video_state->audio_codec_context) {
+        memset(stream, 0, len); // Output silence if not ready
+        log_warn("Audio context not ready");
+        return;
+    }
     while (len > 0) {
         if (video_state->audio_buffer_index >= video_state->audio_buffer_size) {
             audio_size = audio_decode_frame(video_state);
@@ -316,6 +346,7 @@ void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
         video_state->audio_buffer_index += len1;
     }
 }
+
 
 /** We'll find our codec decoders, setup audio options and launch the audio and video decoding threads **/
 int stream_component_open(VideoState *video_state, int stream_index) {
@@ -356,6 +387,37 @@ int stream_component_open(VideoState *video_state, int stream_index) {
             wanted_spec.callback = sdl_audio_callback;
             wanted_spec.userdata = video_state;
             wanted_spec.samples = SDL_AUDIO_BUFFER_SIZE;
+
+            video_state->swr_ctx = swr_alloc();
+
+        // Convert audio to FMT_S16
+            swr_alloc_set_opts2(
+                &video_state->swr_ctx,
+                // Output
+                &codec_context->ch_layout, // output channel layout
+                AV_SAMPLE_FMT_S16, // output sample format
+                codec_context->sample_rate, // output sample rate
+                // Input
+                &codec_context->ch_layout, // input channel layout
+                codec_context->sample_fmt, // input sample format
+                codec_context->sample_rate, // input sample rate
+                0,
+                NULL
+            );
+
+            if (!video_state->swr_ctx) {
+                log_error("swr_alloc_set_opts failed");
+                ret = -1;
+                goto cleanup;
+            }
+            if (swr_init(video_state->swr_ctx) < 0) {
+                log_error("Failed to initialize the resampling context");
+                swr_free(&video_state->swr_ctx);
+                video_state->swr_ctx = NULL;
+                ret = -1;
+                goto cleanup;
+            }
+
 
             if (SDL_OpenAudio(&wanted_spec, &spec) < 0) {
                 log_error("Failed to open SDL audio");
