@@ -12,13 +12,15 @@
 typedef struct PlayerState {
     AVFormatContext *format_context;
 
-    AudioState audio;
-    VideoState video;
+    AudioState *audio_state;
+    VideoState *video_state;
 
-    PacketQueue audio_queue;
-    PacketQueue video_queue;
+    PacketQueue *audio_packet_queue;
+    PacketQueue *video_packet_queue;
 
-    SDL_Thread *decode_thread;
+    SDL_Thread *video_decode_thread;
+    SDL_Thread *packet_queueing_thread;
+    int *quit;
 } PlayerState;
 
 
@@ -26,5 +28,5 @@ int player_init(PlayerState *player, const char *filename, SDL_Renderer *rendere
 
 void player_cleanup(PlayerState *player);
 
-int player_run(PlayerState *player, SDL_Window *window, SDL_Renderer *renderer);
+int player_run(PlayerState *player);
 #endif //PLAYER_H

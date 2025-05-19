@@ -31,10 +31,17 @@ add_library(microlog STATIC
         libs/microlog/microlog.h)
 
 add_library(decoders STATIC
-        decoders/decoder.c
-        decoders/decoder.h)
+        utils/packet_queue.h
+        utils/packet_queue.c
+        audio/audio.h
+        audio/audio.c
+        player/player.h
+        player/player.c
+        video/video.h
+        video/video.c)
 
-add_executable(VLC_Clone main.c)
+add_executable(VLC_Clone main.c
+       )
 
 target_link_libraries(VLC_Clone PRIVATE
         ${FFMPEG_LIBRARIES}

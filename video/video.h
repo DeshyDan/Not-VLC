@@ -25,10 +25,9 @@ typedef struct VideoState {
     AVStream *stream;
 
     AVCodecContext *codec_context;
-    SDL_Texture *texture;
     struct SwsContext *sws_ctx;
 
-    PacketQueue video_packet_queue;
+    PacketQueue *packet_queue;
     VideoPicture picture_queue[VIDEO_PICTURE_QUEUE_SIZE];
     int picture_queue_size;
     int picture_queue_read_index;
@@ -37,14 +36,17 @@ typedef struct VideoState {
     SDL_cond *picture_queue_cond;
 
     SDL_Renderer *renderer;
-    SDL_Texture *video_texture;
-    SDL_Surface *screen;
+    SDL_Texture *texture;
     SDL_mutex *screen_mutex;
+
+    int *quit;
 } VideoState;
 
-int video_init(VideoState *video, AVFormatContext *fmt_ctx, SDL_Renderer *renderer);
+int video_init(VideoState *video_state, AVFormatContext *fmt_ctx, SDL_Renderer *renderer);
 
 void video_cleanup(VideoState *video);
+
+int video_thread(void *userdata);
 
 void video_display(VideoState *video);
 

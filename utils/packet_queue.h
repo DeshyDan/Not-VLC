@@ -21,5 +21,5 @@ void packet_queue_init(PacketQueue *queue);
 void packet_queue_destroy(PacketQueue *queue);
 int packet_queue_put(PacketQueue *queue, AVPacket *packet);
 int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block);
-
+int packet_queueing_thread(void *userdata);
 #endif //PACKET_QUEUE_H

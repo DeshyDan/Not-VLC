@@ -14,15 +14,25 @@
 #define MAX_AUDIO_FRAME_SIZE 192000
 
 typedef struct AudioState {
+    AVFormatContext *format_context;
     AVStream *stream;
     int stream_index;
-    AVCodecContext *codec_ctx;
+    AVCodecContext *codec_context;
 
-    PacketQueue audio_packet_queue;
+    AVPacket packet;
+
+    PacketQueue *audio_packet_queue;
     uint8_t audio_buffer[(MAX_AUDIO_FRAME_SIZE * 3) / 2];
     unsigned int buffer_size;
     unsigned int buffer_index;
-    struct SwsContext *sws_context;
+    struct SwrContext *swr_ctx;
+
+    int *quit;
 } AudioState;
 
+int audio_init(AudioState *audio, AVFormatContext *format_context);
+
+void audio_cleanup(AudioState *audio);
+
+void sdl_audio_callback(void *userdata, Uint8 *stream, int len);
 #endif //AUDIO_H
