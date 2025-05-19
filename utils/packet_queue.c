@@ -8,8 +8,10 @@
 #include "../libs/microlog/microlog.h"
 #include "../player/player.h"
 #include <stdbool.h>
+#include "../audio/audio.h"
+#include "../video/video.h"
 
-#define MAX_AUDIO_QUEUE_SIZE (5 * 16 * 1024)
+#define MAX_AUDIO_QUEUE_SIZE (10 * 1024 * 1024)
 #define MAX_VIDEO_QUEUE_SIZE (5 * 256 * 1024)
 
 
@@ -28,16 +30,16 @@ int packet_queue_put(PacketQueue *queue, AVPacket *packet) {
 
     SDL_CondSignal(queue->cond); // Wake up packet_queue_get()
     SDL_UnlockMutex(queue->mutex);
-    log_info("Packet queued: %d packets, size: %d", queue->nb_packets, queue->size);
-
+    log_info("[%s] Packet queued: %d packets, size: %d", queue->name, queue->nb_packets, queue->size);
     return 0;
 }
 
-void packet_queue_init(PacketQueue *queue) {
+void packet_queue_init(PacketQueue *queue, char *name) {
     queue->packet_fifo = av_fifo_alloc2(32, sizeof(AVPacket *), AV_FIFO_FLAG_AUTO_GROW);
     queue->mutex = SDL_CreateMutex();
     queue->cond = SDL_CreateCond();
-    log_info("Packet queue initialized");
+    queue->name = name;
+    log_info("[%s] Packet queue initialized", name);
 }
 
 int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
@@ -45,8 +47,10 @@ int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
     int ret = 0;
 
     SDL_LockMutex(queue->mutex);
+    log_info("[%s] Locked packet queue mutex, waiting for packet...", queue->name);
     while (true) {
         if (av_fifo_read(queue->packet_fifo, &pkt, 1) >= 0) {
+            log_info("[%s] Got packet from queue", queue->name);
             queue->nb_packets--;
             queue->size -= pkt->size;
             av_packet_move_ref(packet, pkt);
@@ -54,14 +58,16 @@ int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
             ret = 1;
             break;
         } else if (!block) {
+            log_info("[%s] No packet available and not blocking", queue->name);
             ret = 0;
             break;
         } else {
+            log_warn("[%s] Waiting for packet in queue...", queue->name);
             SDL_CondWait(queue->cond, queue->mutex);
         }
     }
     SDL_UnlockMutex(queue->mutex);
-    log_info("Packet dequeued: %d packets, size: %d", queue->nb_packets, queue->size);
+    log_info("[%s] Packet dequeued: %d packets, size: %d", queue->name,  queue->nb_packets, queue->size);
     return ret;
 }
 
@@ -107,13 +113,12 @@ int packet_queueing_thread(void *userdata) {
 
         if (packet->stream_index == player_state->video_state->stream_index) {
             packet_queue_put(player_state->video_packet_queue, packet);
-            log_info("Added packet to video queue");
+            log_info("Added video packet to video queue");
         } else if (packet->stream_index == player_state->audio_state->stream_index) {
             packet_queue_put(player_state->audio_packet_queue, packet);
-            log_info("Added packet to audio queue");
-        } else {
-            av_packet_unref(packet);
+            log_info("Added audio packet to audio queue");
         }
+        av_packet_unref(packet);
     }
 
     av_packet_free(&packet);

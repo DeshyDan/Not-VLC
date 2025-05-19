@@ -7,13 +7,34 @@
 #include <libswresample/swresample.h>
 
 #include "../libs/microlog/microlog.h"
+#include "../player/player.h"
 
+/** takes time to move all the data from audio packet to buffer which means that the value in the audio clock could be
+ * too far ahead **/
+double get_audio_clock(AudioState *audio_state) {
+    double presentation_time_stamp = audio_state->audio_clock; // last known presentation time stamp
+    int hw_buf_size = audio_state->buffer_size - audio_state->buffer_index;
+    int bytes_per_second = 0;
+    int n = audio_state->codec_context->ch_layout.nb_channels * 2;
+
+    if (audio_state->stream) {
+        bytes_per_second = audio_state->stream->codecpar->sample_rate * n;
+    }
+
+    if (bytes_per_second) {
+        presentation_time_stamp -= (double) hw_buf_size / bytes_per_second;
+        // time it would take to play remaining audio
+    }
+
+    return presentation_time_stamp;
+}
 
 int audio_decode_frame(AudioState *audio_state) {
     int data_size = 0;
     AVPacket *packet = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
     uint8_t *audio_buf = NULL;
+    double presentation_time_stamp = 0;
 
     while (1) {
         if (packet_queue_get(audio_state->audio_packet_queue, packet, 1) <= 0) {
@@ -30,13 +51,18 @@ int audio_decode_frame(AudioState *audio_state) {
             continue;
         }
 
-
         log_info("Receiving frame from decoder");
         if (avcodec_receive_frame(audio_state->codec_context, frame) < 0) {
             log_error("Failed to receive frame");
             av_frame_unref(frame);
             av_packet_unref(packet);
             continue;
+        }
+
+        if (packet->dts != AV_NOPTS_VALUE) {
+            audio_state->audio_clock = av_q2d(audio_state->stream->time_base) * packet->dts;
+        } else {
+            log_warn("Undefined DTS value");
         }
 
         // Resample audio to S16 format
@@ -72,6 +98,9 @@ int audio_decode_frame(AudioState *audio_state) {
         }
 
         memcpy(audio_state->audio_buffer, audio_buf, data_size);
+        presentation_time_stamp = audio_state->audio_clock;
+        int n = 2 * audio_state->codec_context->ch_layout.nb_channels;
+        audio_state->audio_clock += (double) data_size / (double) (n * audio_state->codec_context->sample_rate);
         av_freep(&audio_buf);
         av_frame_free(&frame);
         av_packet_free(&packet);
@@ -81,6 +110,7 @@ int audio_decode_frame(AudioState *audio_state) {
 }
 
 void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
+    log_info("SDL audio callback called");
     AudioState *audio_state = (AudioState *) userdata;
     int audio_size;
     int len1;
@@ -92,7 +122,7 @@ void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
     }
     while (len > 0) {
         if (audio_state->buffer_index >= audio_state->buffer_size) {
-            audio_size = audio_decode_frame(audio_state);
+            audio_size =  audio_decode_frame(audio_state);
             if (audio_size < 0) {
                 log_info("Audio buffer empty, filling with silence");
                 audio_state->buffer_size = 1024;
@@ -103,6 +133,8 @@ void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
             }
             audio_state->buffer_index = 0;
         }
+
+        log_info("Audio buffer index: %d, size: %d", audio_state->buffer_index, audio_state->buffer_size);
         len1 = audio_state->buffer_size - audio_state->buffer_index;
         if (len1 > len) {
             len1 = len;
@@ -111,6 +143,7 @@ void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
         len -= len1;
         stream += len1;
         audio_state->buffer_index += len1;
+        log_info("Audio buffer index after copy: %d", audio_state->buffer_index);
     }
 }
 
@@ -237,18 +270,18 @@ static int find_stream_index(AudioState *audio_state, AVFormatContext *fmt_ctx) 
     return 0;
 }
 
-int audio_init(AudioState *audio_state, AVFormatContext *format_context) {
-    if (find_stream_index(audio_state, format_context) < 0) {
+int audio_init(AudioState *audio_state, PlayerState *player_state) {
+    if (find_stream_index(audio_state, player_state->format_context) < 0) {
         log_error("Could not find audio stream index");
         return -1;
     }
 
-    if (stream_component_open(audio_state, format_context) < 0) {
+    if (stream_component_open(audio_state, player_state->format_context) < 0) {
         log_error("Could not open audio stream");
         return -1;
     }
     audio_state->audio_packet_queue = malloc(sizeof(PacketQueue));
-    packet_queue_init(audio_state->audio_packet_queue);
+    packet_queue_init(audio_state->audio_packet_queue, "Audio Queue");
     log_info("Initialized audio packet queue");
 
     return 0;

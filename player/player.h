@@ -5,9 +5,14 @@
 #ifndef PLAYER_H
 #define PLAYER_H
 
-#include "../audio/audio.h"
-#include "../video/video.h"
+#include <SDL_render.h>
+#include <SDL_thread.h>
+#include <libavformat/avformat.h>
 #include "../utils/packet_queue.h"
+
+// Forward declarations
+typedef struct AudioState AudioState;
+typedef struct VideoState VideoState;
 
 typedef struct PlayerState {
     AVFormatContext *format_context;

@@ -14,10 +14,16 @@
 #define FF_REFRESH_EVENT (SDL_USEREVENT)
 #define FF_QUIT_EVENT (SDL_USEREVENT + 1)
 
+// Forward declarations
+typedef struct PlayerState PlayerState;
+
+typedef double (*GetAudioClockFn)(void *userdata);
+
 typedef struct VideoPicture {
     int width;
     int height;
     int allocated;
+    double presentation_time_stamp;
 } VideoPicture;
 
 typedef struct VideoState {
@@ -39,10 +45,19 @@ typedef struct VideoState {
     SDL_Texture *texture;
     SDL_mutex *screen_mutex;
 
+    double video_clock;
+    double frame_last_presentation_time_stamp;
+    double frame_last_delay;
+    double frame_timer;
+
+    GetAudioClockFn get_audio_clock;
+    void *audio_clock_userdata;
     int *quit;
 } VideoState;
 
-int video_init(VideoState *video_state, AVFormatContext *fmt_ctx, SDL_Renderer *renderer);
+void set_get_audio_clock_fn(GetAudioClockFn fn, VideoState *video_state, void *userdata);
+
+int video_init(VideoState *video_state, PlayerState *player_state, SDL_Renderer *renderer);
 
 void video_cleanup(VideoState *video);
 

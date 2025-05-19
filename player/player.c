@@ -8,6 +8,8 @@
 #include <SDL_events.h>
 
 #include "../libs/microlog/microlog.h"
+#include "../audio/audio.h"
+#include "../video/video.h"
 
 int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *renderer) {
     player_state->format_context = avformat_alloc_context();
@@ -32,23 +34,23 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
     VideoState *video_state = malloc(sizeof(VideoState));
     AudioState *audio_state = malloc(sizeof(AudioState));
 
+    player_state->video_state = video_state;
+    player_state->audio_state = audio_state;
+
     if (!video_state || !audio_state) {
         log_error("Could not allocate video/audio state");
         return -1;
     }
 
-    if (video_init(video_state, player_state->format_context, renderer) < 0) {
-        log_error("Could not initialize video");
-        return -1;
-    }
-
-    if (audio_init(audio_state, player_state->format_context) < 0) {
+    if (audio_init(audio_state, player_state) < 0) {
         log_error("Could not initialize audio");
         return -1;
     }
 
-    player_state->video_state = video_state;
-    player_state->audio_state = audio_state;
+    if (video_init(video_state, player_state, renderer) < 0) {
+        log_error("Could not initialize video");
+        return -1;
+    }
 
     player_state->audio_packet_queue = audio_state->audio_packet_queue;
     player_state->video_packet_queue = video_state->packet_queue;
@@ -57,15 +59,15 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
     video_state->quit = player_state->quit;
     audio_state->quit = player_state->quit;
 
+
     return 0;
 }
-
 
 
 int player_run(PlayerState *player_state) {
     SDL_Event event;
     player_state->packet_queueing_thread = SDL_CreateThread(packet_queueing_thread, "packet queuing thread",
-                                                          player_state);
+                                                            player_state);
     player_state->video_decode_thread = SDL_CreateThread(video_thread, "video thread", player_state);
     if (!player_state->video_decode_thread) {
         log_error("Could not create video decode thread");

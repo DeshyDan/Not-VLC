@@ -5,9 +5,20 @@
 #include <SDL_events.h>
 #include <SDL_timer.h>
 #include <libswscale/swscale.h>
-
+#include <libavutil/time.h>
 #include "../libs/microlog/microlog.h"
 #include "../player/player.h"
+#include  "../audio/audio.h"
+
+#define AV_SYNC_THRESHOLD 0.01
+#define AV_NOSYNC_THRESHOLD 10.0
+
+void set_get_audio_clock_fn(GetAudioClockFn fn, VideoState *video_state, void *userdata) {
+    AudioState *audio_state = (AudioState *) userdata;
+    video_state->get_audio_clock = fn;
+    video_state->audio_clock_userdata = audio_state;
+    log_info("Set get audio clock function and userdata");
+}
 
 static Uint32 sdl_refresh_timer_callback(Uint32 interval, void *user_data) {
     SDL_Event event;
@@ -27,6 +38,12 @@ void video_refresh_timer(void *userdata) {
     VideoState *video_state = (VideoState *) userdata;
     VideoPicture *video_picture;
 
+    double actual_delay;
+    double delay;
+    double sync_threshold;
+    double ref_clock;
+    double diff;
+
     if (video_state->stream) {
         // Pull from the queue when we have something in the queue and then set timer so we display the next video frame
         //
@@ -36,7 +53,36 @@ void video_refresh_timer(void *userdata) {
         } else {
             video_picture = &video_state->picture_queue[video_state->picture_queue_read_index];
 
-            schedule_refresh(video_state, 80);
+            delay = video_picture->presentation_time_stamp - video_state->frame_last_presentation_time_stamp;
+            if (delay < 0 || delay >= 1.0) {
+                log_warn("Incorrect delay, using previous one");
+                delay = video_state->frame_last_delay;
+            }
+
+            video_state->frame_last_delay = delay;
+            video_state->frame_last_presentation_time_stamp = video_picture->presentation_time_stamp;
+            ref_clock = video_state->get_audio_clock(video_state->audio_clock_userdata);
+            diff = video_picture->presentation_time_stamp - ref_clock;
+            sync_threshold = (delay > AV_SYNC_THRESHOLD) ? delay : AV_SYNC_THRESHOLD;
+
+            if (fabs(diff) < AV_NOSYNC_THRESHOLD) {
+                if (diff <= -sync_threshold) {
+                    delay = 0;
+                } else if (diff >= sync_threshold) {
+                    delay = 2 * delay;
+                }
+            }
+
+            video_state->frame_timer += delay;
+            actual_delay = video_state->frame_timer - (av_gettime() / 1000000.0);
+            // note :av_gettime returns the time in microseconds
+
+            if (actual_delay < 0.010) {
+                log_warn("Actual delay too small, setting to 0.010");
+                actual_delay = 0.010;
+            }
+
+            schedule_refresh(video_state, (int) (actual_delay * 1000 + 0.5));
             video_display(video_state);
 
             // update queue for the next picture
@@ -87,8 +133,9 @@ void alloc_picture(void *userdata) {
     SDL_SetTextureBlendMode(video_state->texture, SDL_BLENDMODE_NONE);
 }
 
-int queue_picture(VideoState *video_state, AVFrame *frame) {
+int queue_picture(VideoState *video_state, AVFrame *frame, double presentation_time_stamp) {
     VideoPicture *video_picture;
+
 
     // Inorder to write to the queue, we need to wait for the buffer to clear out so we have space to store
     // the VideoPicture.
@@ -125,6 +172,8 @@ int queue_picture(VideoState *video_state, AVFrame *frame) {
     if (video_state->texture) {
         void *pixels;
         int pitch;
+
+        video_picture->presentation_time_stamp = presentation_time_stamp;
 
         if (SDL_LockTexture(video_state->texture, NULL, &pixels, &pitch) < 0) {
             log_error("Could not lock texture");
@@ -163,11 +212,31 @@ int queue_picture(VideoState *video_state, AVFrame *frame) {
     return 0;
 }
 
+double synchronize_video(VideoState *video_state, AVFrame *frame, double presentation_time_stamp) {
+    double frame_delay;
+
+    if (presentation_time_stamp != 0) {
+        log_info("Synchronizing video: presentation_time_stamp=%f", presentation_time_stamp);
+        video_state->video_clock = presentation_time_stamp;
+    } else {
+        presentation_time_stamp = video_state->video_clock;
+        log_info("No presentation_time_stamp, using video clock: %f", video_state->video_clock);
+    }
+
+    frame_delay = av_q2d(video_state->stream->time_base); // duration of a frame in seconds
+    frame_delay += frame->repeat_pict * (frame_delay * 0.5); //if frame was repeated
+    log_info("Frame delay: %f", frame_delay);
+    video_state->video_clock += frame_delay;
+    log_info("Updated video clock: %f", video_state->video_clock);
+    return presentation_time_stamp;
+}
+
 int video_thread(void *userdata) {
     PlayerState *player_state = (PlayerState *) userdata;
     VideoState *video_state = player_state->video_state;
     AVPacket *packet = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
+    double presentation_time_stamp; // Tells us when the video should be displayed
 
     while (true) {
         if (packet_queue_get(video_state->packet_queue, packet, 1) < 0) {
@@ -188,18 +257,34 @@ int video_thread(void *userdata) {
             // TODO: What do we do when we fail to get a frame???
             // Just continue for now and hope everything works :D
             continue;
-        } else {
-            if (queue_picture(video_state, frame) < 0) {
-                log_error("Failed to queue picture");
-                break;
-            }
-            log_info("Queued picture");
         }
+
+        if (packet->dts != AV_NOPTS_VALUE) {
+            log_warn("Undefined DTS value");
+            presentation_time_stamp = frame->best_effort_timestamp;
+        } else {
+            presentation_time_stamp = 0;
+        }
+
+        presentation_time_stamp *= av_q2d(video_state->stream->time_base);
+        log_info("Got video frame: presentation_time_stamp=%f", presentation_time_stamp);
+
+        presentation_time_stamp = synchronize_video(video_state, frame, presentation_time_stamp);
+        if (queue_picture(video_state, frame, presentation_time_stamp) < 0) {
+            log_error("Failed to queue picture");
+            break;
+        }
+        log_info("Queued picture");
+
         av_packet_unref(packet);
     }
+
     av_free(frame);
+
     av_free(packet);
-    return 0;
+
+    return
+            0;
 }
 
 void video_display(VideoState *video_state) {
@@ -316,6 +401,9 @@ int stream_component_open(VideoState *video_state, AVFormatContext *format_conte
         goto cleanup;
     }
 
+    video_state->frame_timer = (double) av_gettime() / 1000000.0;
+    video_state->frame_last_delay = 40e-3;
+
     return ret;
 cleanup:
     if (codec_ctx) {
@@ -328,8 +416,8 @@ cleanup:
     return ret;
 }
 
-int video_init(VideoState *video_state, AVFormatContext *format_context, SDL_Renderer *renderer) {
-    if (find_stream_index(video_state, format_context) < 0) {
+int video_init(VideoState *video_state, PlayerState *player_state, SDL_Renderer *renderer) {
+    if (find_stream_index(video_state, player_state->format_context) < 0) {
         log_error("Could not find stream info");
         return -1;
     }
@@ -342,13 +430,15 @@ int video_init(VideoState *video_state, AVFormatContext *format_context, SDL_Ren
     video_state->picture_queue_read_index = 0;
     video_state->picture_queue_write_index = 0;
 
-    if (stream_component_open(video_state, format_context) < 0) {
+    if (stream_component_open(video_state, player_state->format_context) < 0) {
         log_error("Could not open video stream component");
         return -1;
     }
     video_state->packet_queue = malloc(sizeof(PacketQueue));
 
-    packet_queue_init(video_state->packet_queue);
+    packet_queue_init(video_state->packet_queue, "Video Queue");
+
+    set_get_audio_clock_fn((GetAudioClockFn) get_audio_clock, video_state, player_state->audio_state);
 
     return 0;
 }

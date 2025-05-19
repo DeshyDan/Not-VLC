@@ -13,6 +13,9 @@
 #define SDL_AUDIO_BUFFER_SIZE 1024
 #define MAX_AUDIO_FRAME_SIZE 192000
 
+// Forward declarations
+typedef struct PlayerState PlayerState;
+
 typedef struct AudioState {
     AVFormatContext *format_context;
     AVStream *stream;
@@ -27,12 +30,16 @@ typedef struct AudioState {
     unsigned int buffer_index;
     struct SwrContext *swr_ctx;
 
+    double audio_clock;
+
     int *quit;
 } AudioState;
 
-int audio_init(AudioState *audio, AVFormatContext *format_context);
+int audio_init(AudioState *audio, PlayerState *player_state);
 
 void audio_cleanup(AudioState *audio);
 
 void sdl_audio_callback(void *userdata, Uint8 *stream, int len);
+
+double get_audio_clock(AudioState *audio_state);
 #endif //AUDIO_H
