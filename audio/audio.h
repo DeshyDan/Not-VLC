@@ -31,6 +31,11 @@ typedef struct AudioState {
     struct SwrContext *swr_ctx;
 
     double audio_clock;
+    double audio_diff_cum;
+    double audio_diff_avg_coef;
+    double audio_diff_threshold;
+    int audio_diff_avg_count;
+
 
     int *quit;
 } AudioState;
@@ -42,4 +47,6 @@ void audio_cleanup(AudioState *audio);
 void sdl_audio_callback(void *userdata, Uint8 *stream, int len);
 
 double get_audio_clock(AudioState *audio_state);
+
+double get_external_clock();
 #endif //AUDIO_H

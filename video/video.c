@@ -9,6 +9,7 @@
 #include "../libs/microlog/microlog.h"
 #include "../player/player.h"
 #include  "../audio/audio.h"
+#include "../utils/sync.h"
 
 #define AV_SYNC_THRESHOLD 0.01
 #define AV_NOSYNC_THRESHOLD 10.0
@@ -46,12 +47,14 @@ void video_refresh_timer(void *userdata) {
 
     if (video_state->stream) {
         // Pull from the queue when we have something in the queue and then set timer so we display the next video frame
-        //
         if (video_state->picture_queue_size == 0) {
             log_warn("No picture in queue");
             schedule_refresh(video_state, 1);
         } else {
             video_picture = &video_state->picture_queue[video_state->picture_queue_read_index];
+
+            video_state->video_current_pts = video_picture->presentation_time_stamp;
+            video_state->video_current_pts_time = av_gettime();
 
             delay = video_picture->presentation_time_stamp - video_state->frame_last_presentation_time_stamp;
             if (delay < 0 || delay >= 1.0) {
@@ -61,7 +64,15 @@ void video_refresh_timer(void *userdata) {
 
             video_state->frame_last_delay = delay;
             video_state->frame_last_presentation_time_stamp = video_picture->presentation_time_stamp;
-            ref_clock = video_state->get_audio_clock(video_state->audio_clock_userdata);
+
+            if (sync_state->av_sync_type == AV_SYNC_AUDIO_MASTER) {
+                ref_clock = video_state->get_audio_clock(video_state->audio_clock_userdata);
+            } else if (sync_state->av_sync_type == AV_SYNC_EXTERNAL_MASTER) {
+                ref_clock = get_external_clock();
+            } else {
+                ref_clock = video_picture->presentation_time_stamp;
+            }
+
             diff = video_picture->presentation_time_stamp - ref_clock;
             sync_threshold = (delay > AV_SYNC_THRESHOLD) ? delay : AV_SYNC_THRESHOLD;
 
@@ -212,25 +223,6 @@ int queue_picture(VideoState *video_state, AVFrame *frame, double presentation_t
     return 0;
 }
 
-double synchronize_video(VideoState *video_state, AVFrame *frame, double presentation_time_stamp) {
-    double frame_delay;
-
-    if (presentation_time_stamp != 0) {
-        log_info("Synchronizing video: presentation_time_stamp=%f", presentation_time_stamp);
-        video_state->video_clock = presentation_time_stamp;
-    } else {
-        presentation_time_stamp = video_state->video_clock;
-        log_info("No presentation_time_stamp, using video clock: %f", video_state->video_clock);
-    }
-
-    frame_delay = av_q2d(video_state->stream->time_base); // duration of a frame in seconds
-    frame_delay += frame->repeat_pict * (frame_delay * 0.5); //if frame was repeated
-    log_info("Frame delay: %f", frame_delay);
-    video_state->video_clock += frame_delay;
-    log_info("Updated video clock: %f", video_state->video_clock);
-    return presentation_time_stamp;
-}
-
 int video_thread(void *userdata) {
     PlayerState *player_state = (PlayerState *) userdata;
     VideoState *video_state = player_state->video_state;
@@ -259,11 +251,11 @@ int video_thread(void *userdata) {
             continue;
         }
 
-        if (packet->dts != AV_NOPTS_VALUE) {
-            log_warn("Undefined DTS value");
+        if (packet->dts == AV_NOPTS_VALUE) {
+            log_warn("Undefined DTS value, using best effort");
             presentation_time_stamp = frame->best_effort_timestamp;
         } else {
-            presentation_time_stamp = 0;
+            presentation_time_stamp = packet->dts;
         }
 
         presentation_time_stamp *= av_q2d(video_state->stream->time_base);
@@ -403,6 +395,7 @@ int stream_component_open(VideoState *video_state, AVFormatContext *format_conte
 
     video_state->frame_timer = (double) av_gettime() / 1000000.0;
     video_state->frame_last_delay = 40e-3;
+    video_state->video_current_pts_time = av_gettime();
 
     return ret;
 cleanup:

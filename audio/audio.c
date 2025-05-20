@@ -8,26 +8,7 @@
 
 #include "../libs/microlog/microlog.h"
 #include "../player/player.h"
-
-/** takes time to move all the data from audio packet to buffer which means that the value in the audio clock could be
- * too far ahead **/
-double get_audio_clock(AudioState *audio_state) {
-    double presentation_time_stamp = audio_state->audio_clock; // last known presentation time stamp
-    int hw_buf_size = audio_state->buffer_size - audio_state->buffer_index;
-    int bytes_per_second = 0;
-    int n = audio_state->codec_context->ch_layout.nb_channels * 2;
-
-    if (audio_state->stream) {
-        bytes_per_second = audio_state->stream->codecpar->sample_rate * n;
-    }
-
-    if (bytes_per_second) {
-        presentation_time_stamp -= (double) hw_buf_size / bytes_per_second;
-        // time it would take to play remaining audio
-    }
-
-    return presentation_time_stamp;
-}
+#include "../utils/sync.h"
 
 int audio_decode_frame(AudioState *audio_state) {
     int data_size = 0;
@@ -114,6 +95,7 @@ void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
     AudioState *audio_state = (AudioState *) userdata;
     int audio_size;
     int len1;
+    double pts;
 
     if (!audio_state->swr_ctx || !audio_state->codec_context) {
         memset(stream, 0, len); // Output silence if not ready
@@ -122,13 +104,17 @@ void sdl_audio_callback(void *userdata, Uint8 *stream, int len) {
     }
     while (len > 0) {
         if (audio_state->buffer_index >= audio_state->buffer_size) {
-            audio_size =  audio_decode_frame(audio_state);
+            audio_size = audio_decode_frame(audio_state);
             if (audio_size < 0) {
                 log_info("Audio buffer empty, filling with silence");
                 audio_state->buffer_size = 1024;
                 memset(audio_state->audio_buffer, 0, audio_state->buffer_size);
             } else {
                 log_info("Audio buffer filled with %d bytes", audio_size);
+                audio_size = synchronize_audio(audio_state,
+                                               (int16_t *) audio_state->audio_buffer,
+                                               audio_size,
+                                               pts);
                 audio_state->buffer_size = audio_size;
             }
             audio_state->buffer_index = 0;

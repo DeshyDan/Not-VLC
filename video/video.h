@@ -49,6 +49,8 @@ typedef struct VideoState {
     double frame_last_presentation_time_stamp;
     double frame_last_delay;
     double frame_timer;
+    double video_current_pts;
+    int64_t video_current_pts_time;
 
     GetAudioClockFn get_audio_clock;
     void *audio_clock_userdata;

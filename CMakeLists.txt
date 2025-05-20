@@ -38,7 +38,9 @@ add_library(decoders STATIC
         player/player.h
         player/player.c
         video/video.h
-        video/video.c)
+        video/video.c
+        utils/sync.h
+        utils/sync.c)
 
 add_executable(VLC_Clone main.c
        )

@@ -9,6 +9,7 @@
 
 #include "../libs/microlog/microlog.h"
 #include "../audio/audio.h"
+#include "../utils/sync.h"
 #include "../video/video.h"
 
 int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *renderer) {
@@ -59,6 +60,7 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
     video_state->quit = player_state->quit;
     audio_state->quit = player_state->quit;
 
+    sync_init(DEFAULT_AV_SYNC_TYPE);
 
     return 0;
 }
