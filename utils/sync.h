@@ -21,7 +21,6 @@ typedef struct SyncState {
     int av_sync_type;
     double audio_clock; // clock for audio
     double video_clock;
-
 } SyncState;
 
 extern SyncState *sync_state;
@@ -39,4 +38,6 @@ double get_master_clock(void *userdata);
 double get_external_clock();
 
 double get_audio_clock(AudioState *audio_state);
+
+int sync_reset_clock(double clock);
 #endif //SYNC_H

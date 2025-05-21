@@ -436,6 +436,13 @@ int video_init(VideoState *video_state, PlayerState *player_state, SDL_Renderer 
     return 0;
 }
 
+int video_state_reset(VideoState *video_state) {
+    // TODO: What about the pictures queues?
+    video_state->frame_timer = (double)av_gettime() / 1000000.0;
+    video_state->frame_last_delay = 40e-3;
+    video_state->video_current_pts = NAN;
+    video_state->video_current_pts_time = av_gettime();
+}
 void video_cleanup(VideoState *video_state) {
     if (video_state->texture) {
         SDL_DestroyTexture(video_state->texture);

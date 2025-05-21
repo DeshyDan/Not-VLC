@@ -60,6 +60,8 @@ void set_get_audio_clock_fn(GetAudioClockFn fn, VideoState *video_state, void *u
 
 int video_init(VideoState *video_state, PlayerState *player_state, SDL_Renderer *renderer);
 
+int video_state_reset(VideoState *video_state);
+
 void video_cleanup(VideoState *video);
 
 int video_thread(void *userdata);

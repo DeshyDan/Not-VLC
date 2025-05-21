@@ -15,6 +15,17 @@
 
 SyncState *sync_state = NULL;
 
+int sync_reset_clock(double clock) {
+    if (!sync_state) {
+        log_error("Failed to resest clocks");
+        return -1;
+    }
+    sync_state->audio_clock = clock;
+    sync_state->video_clock = clock;
+
+    return 0;
+}
+
 double get_external_clock() {
     return av_gettime() / 1000000.0;
 }
@@ -25,13 +36,13 @@ double get_audio_clock(AudioState *audio_state) {
     double pts = sync_state->audio_clock;
     int hw_buf_size = audio_state->buffer_size - audio_state->buffer_index;
     int bytes_per_second = audio_state->stream->codecpar->sample_rate *
-                          audio_state->codec_context->ch_layout.nb_channels * 2;
+                           audio_state->codec_context->ch_layout.nb_channels * 2;
 
     double adjustment = (double) hw_buf_size / bytes_per_second;
     double adjusted_pts = pts - adjustment;
 
     log_debug("Audio clock: pts=%.3f, buf_size=%d, adj=%.3f, final=%.3f",
-        pts, hw_buf_size, adjustment, adjusted_pts);
+              pts, hw_buf_size, adjustment, adjusted_pts);
 
     return adjusted_pts;
 }

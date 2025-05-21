@@ -6,6 +6,7 @@
 
 #include <SDL.h>
 #include <SDL_events.h>
+#include <libavutil/time.h>
 
 #include "../libs/microlog/microlog.h"
 #include "../audio/audio.h"
@@ -71,14 +72,16 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
     return 0;
 }
 
-static void stream_seek(PlayerState *player_state, int64_t pos, double incr) {
+static void stream_seek(PlayerState *player_state, int64_t pos, int flags) {
     SDL_LockMutex(player_state->seek_mutex);
 
     if (!player_state->seek_req && player_state->seek_complete) {
         player_state->seek_pos = pos;
-        player_state->seek_flags = (incr < 0) ? AVSEEK_FLAG_BACKWARD : 0;
+        player_state->seek_flags = flags;
         player_state->seek_req = 1;
         player_state->seek_complete = 0;
+
+        sync_reset_clock(pos / (double) AV_TIME_BASE);
     }
 
     SDL_UnlockMutex(player_state->seek_mutex);
@@ -98,7 +101,46 @@ static void handle_seek(PlayerState *player_state, double incr) {
     double duration = player_state->format_context->duration / (double) AV_TIME_BASE;
     if (pos > duration) pos = duration - 1.0;
 
-    stream_seek(player_state, (int64_t) (pos * AV_TIME_BASE), incr);
+    int64_t seek_target = (int64_t)(pos * AV_TIME_BASE);
+
+    int seek_flags = (incr < 0) ? AVSEEK_FLAG_BACKWARD : 0;
+    seek_flags |= AVSEEK_FLAG_ANY;
+    stream_seek(player_state, seek_target, seek_flags);
+}
+
+static void flush_codec_buffers(PlayerState *player_state) {
+    if (player_state->audio_state->codec_context) {
+        avcodec_flush_buffers(player_state->audio_state->codec_context);
+    }
+
+    if (player_state->video_state->codec_context) {
+        avcodec_flush_buffers(player_state->video_state->codec_context);
+    }
+}
+
+static void flush_queues(PlayerState *player_state, int64_t seek_target) {
+    if (player_state->audio_state->stream_index >= 0) {
+        packet_queue_flush(player_state->audio_packet_queue);
+        sync_state->audio_clock = seek_target / (double) AV_TIME_BASE;
+
+        AVPacket *flush_pkt = av_packet_alloc();
+        flush_pkt->data = NULL;
+        packet_queue_put(player_state->audio_packet_queue, flush_pkt);
+        av_packet_free(&flush_pkt);
+        log_info("Flushed audio queue");
+    }
+
+    if (player_state->video_state->stream_index >= 0) {
+        packet_queue_flush(player_state->video_packet_queue);
+
+        AVPacket *flush_pkt = av_packet_alloc();
+        flush_pkt->data = NULL;
+        packet_queue_put(player_state->video_packet_queue, flush_pkt);
+        av_packet_free(&flush_pkt);
+
+        video_state_reset(player_state->video_state);
+        log_info("Flushed video queue");
+    }
 }
 
 int player_run(PlayerState *player_state) {
@@ -122,6 +164,7 @@ int player_run(PlayerState *player_state) {
             SDL_LockMutex(player_state->seek_mutex);
             int stream_index = -1;
             int64_t seek_target = player_state->seek_pos;
+            int seek_flags = player_state->seek_flags;
 
             if (player_state->audio_state->stream_index >= 0) {
                 stream_index = player_state->audio_state->stream_index;
@@ -133,41 +176,16 @@ int player_run(PlayerState *player_state) {
                 seek_target = av_rescale_q(seek_target,
                                            AV_TIME_BASE_Q,
                                            player_state->format_context->streams[stream_index]->time_base);
-            }
-            if (av_seek_frame(player_state->format_context, stream_index, seek_target, player_state->seek_flags) < 0) {
-                log_error("Error while seeking");
-            } else {
-                if (player_state->audio_state->stream_index >= 0) {
-                    sync_state->audio_clock = seek_target / (double) AV_TIME_BASE;
-                    packet_queue_flush(player_state->audio_packet_queue);
-                    AVPacket *audio_flush_packet = av_packet_alloc();
-                    if (!audio_flush_packet) {
-                        log_error("failed to allocate flush packet");
-                        return -1;
-                    }
 
-                    audio_flush_packet->data = NULL;
-                    packet_queue_put(player_state->audio_packet_queue, audio_flush_packet);
-                    av_packet_free(&audio_flush_packet);
-                    log_info("Flushed audio queue");
-                }
+                if (av_seek_frame(player_state->format_context, stream_index, seek_target, seek_flags) < 0) {
+                    log_error("Error while seeking");
+                } else {
+                    flush_codec_buffers(player_state);
 
-                if (player_state->video_state->stream_index >= 0) {
-                    packet_queue_flush(player_state->video_packet_queue);
-
-                    AVPacket *video_flush_packet = av_packet_alloc();
-                    if (!video_flush_packet) {
-                        log_error("failed to allocate flush packet");
-                        return -1;
-                    }
-
-                    video_flush_packet->data = NULL;
-                    packet_queue_put(player_state->video_packet_queue, video_flush_packet);
-                    av_packet_free(&video_flush_packet);
-                    log_info("Flushed video queue");
-                    SDL_Delay(10);
+                    flush_queues(player_state, seek_target);
                 }
             }
+
             player_state->seek_req = 0;
             player_state->seek_complete = 1;
             SDL_UnlockMutex(player_state->seek_mutex);
