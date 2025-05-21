@@ -41,7 +41,7 @@ int audio_decode_frame(AudioState *audio_state) {
         }
 
         if (packet->dts != AV_NOPTS_VALUE) {
-            audio_state->audio_clock = av_q2d(audio_state->stream->time_base) * packet->dts;
+            sync_state->audio_clock = av_q2d(audio_state->stream->time_base) * packet->dts;
         } else {
             log_warn("Undefined DTS value");
         }
@@ -79,9 +79,9 @@ int audio_decode_frame(AudioState *audio_state) {
         }
 
         memcpy(audio_state->audio_buffer, audio_buf, data_size);
-        presentation_time_stamp = audio_state->audio_clock;
+        presentation_time_stamp = sync_state->audio_clock;
         int n = 2 * audio_state->codec_context->ch_layout.nb_channels;
-        audio_state->audio_clock += (double) data_size / (double) (n * audio_state->codec_context->sample_rate);
+        sync_state->audio_clock += (double) data_size / (double) (n * audio_state->codec_context->sample_rate);
         av_freep(&audio_buf);
         av_frame_free(&frame);
         av_packet_free(&packet);
@@ -289,10 +289,6 @@ void audio_cleanup(AudioState *audio_state) {
     if (audio_state->audio_packet_queue) {
         packet_queue_destroy(audio_state->audio_packet_queue);
         log_info("Audio packet queue destroyed");
-    }
-    if (audio_state->audio_packet_queue) {
-        free(audio_state->audio_packet_queue);
-        log_info("Audio packet queue freed");
     }
 
     SDL_CloseAudio();

@@ -19,6 +19,9 @@ enum {
 
 typedef struct SyncState {
     int av_sync_type;
+    double audio_clock; // clock for audio
+    double video_clock;
+
 } SyncState;
 
 extern SyncState *sync_state;
@@ -30,4 +33,10 @@ void sync_cleanup();
 int synchronize_audio(AudioState *audio_state, short *samples, int samples_size, double presentation_time_stamp);
 
 double synchronize_video(VideoState *video_state, AVFrame *frame, double presentation_time_stamp);
+
+double get_master_clock(void *userdata);
+
+double get_external_clock();
+
+double get_audio_clock(AudioState *audio_state);
 #endif //SYNC_H

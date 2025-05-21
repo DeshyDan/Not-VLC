@@ -6,8 +6,8 @@
 #include "sync.h"
 #include "../video/video.h"
 #include "../audio/audio.h"
-#define AV_SYNC_THRESHOLD 0.01
-#define AV_NOSYNC_THRESHOLD 10.0
+#define AV_SYNC_THRESHOLD 0.03
+#define AV_NOSYNC_THRESHOLD 1.0
 
 #define SAMPLE_CORRECTION_PERCENT_MAX 10
 #define AUDIO_DIFF_AVG_NB 20
@@ -22,23 +22,27 @@ double get_external_clock() {
 /** takes time to move all the data from audio packet to buffer which means that the value in the audio clock could be
  * too far ahead **/
 double get_audio_clock(AudioState *audio_state) {
-    double pts = audio_state->audio_clock;
+    double pts = sync_state->audio_clock;
     int hw_buf_size = audio_state->buffer_size - audio_state->buffer_index;
     int bytes_per_second = audio_state->stream->codecpar->sample_rate *
                           audio_state->codec_context->ch_layout.nb_channels * 2;
 
-    double adjustment = (double)hw_buf_size / bytes_per_second;
+    double adjustment = (double) hw_buf_size / bytes_per_second;
     double adjusted_pts = pts - adjustment;
 
     log_debug("Audio clock: pts=%.3f, buf_size=%d, adj=%.3f, final=%.3f",
-             pts, hw_buf_size, adjustment, adjusted_pts);
+        pts, hw_buf_size, adjustment, adjusted_pts);
 
     return adjusted_pts;
 }
 
 double get_video_clock(VideoState *video_state) {
-    double delta = (av_gettime() - video_state->video_current_pts_time) / 1000000.0;
-    return video_state->video_current_pts + delta;
+    if (video_state->video_current_pts_time == 0) {
+        return video_state->video_current_pts;
+    }
+
+    return video_state->video_current_pts +
+           (av_gettime() - video_state->video_current_pts_time) / 1000000.0;
 }
 
 double get_master_clock(void *userdata) {
@@ -60,17 +64,17 @@ double synchronize_video(VideoState *video_state, AVFrame *frame, double present
 
     if (presentation_time_stamp != 0) {
         log_info("Synchronizing video: presentation_time_stamp=%f", presentation_time_stamp);
-        video_state->video_clock = presentation_time_stamp;
+        sync_state->video_clock = presentation_time_stamp;
     } else {
-        presentation_time_stamp = video_state->video_clock;
-        log_info("No presentation_time_stamp, using video clock: %f", video_state->video_clock);
+        presentation_time_stamp = sync_state->video_clock;
+        log_info("No presentation_time_stamp, using video clock: %f", sync_state->video_clock);
     }
 
     frame_delay = av_q2d(video_state->stream->time_base); // duration of a frame in seconds
     frame_delay += frame->repeat_pict * (frame_delay * 0.5); //if frame was repeated
     log_info("Frame delay: %f", frame_delay);
-    video_state->video_clock += frame_delay;
-    log_info("Updated video clock: %f", video_state->video_clock);
+    sync_state->video_clock += frame_delay;
+    log_info("Updated video clock: %f", sync_state->video_clock);
     return presentation_time_stamp;
 }
 
@@ -138,7 +142,6 @@ void sync_init(int sync_type) {
     if (!sync_state) {
         sync_state = malloc(sizeof(SyncState));
         sync_state->av_sync_type = sync_type;
-
     }
 }
 

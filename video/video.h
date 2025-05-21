@@ -45,7 +45,6 @@ typedef struct VideoState {
     SDL_Texture *texture;
     SDL_mutex *screen_mutex;
 
-    double video_clock;
     double frame_last_presentation_time_stamp;
     double frame_last_delay;
     double frame_timer;

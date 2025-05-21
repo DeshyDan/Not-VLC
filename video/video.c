@@ -152,14 +152,14 @@ int queue_picture(VideoState *video_state, AVFrame *frame, double presentation_t
     // the VideoPicture.
 
     SDL_LockMutex(video_state->picture_queue_mutex);
-    while (video_state->picture_queue_size >= VIDEO_PICTURE_QUEUE_SIZE && !video_state->quit) {
+    while (video_state->picture_queue_size >= VIDEO_PICTURE_QUEUE_SIZE && !(*video_state->quit)) {
         log_warn("Picture queue full, waiting for space");
         SDL_CondWait(video_state->picture_queue_cond, video_state->picture_queue_mutex);
     }
     SDL_UnlockMutex(video_state->picture_queue_mutex);
 
 
-    if (video_state->quit) {
+    if (*video_state->quit) {
         log_warn("Video state quit, not queuing picture");
         return -1;
     }
@@ -173,7 +173,7 @@ int queue_picture(VideoState *video_state, AVFrame *frame, double presentation_t
         log_info("Allocating new video picture buffer");
         video_picture->allocated = 0;
         alloc_picture(video_state);
-        if (video_state->quit) {
+        if (*video_state->quit) {
             log_warn("Video state quit, not queuing picture");
             return -1;
         }

@@ -25,6 +25,11 @@ typedef struct PlayerState {
 
     SDL_Thread *video_decode_thread;
     SDL_Thread *packet_queueing_thread;
+    SDL_mutex *seek_mutex;
+    int seek_complete;
+    int seek_req;
+    int seek_flags;
+    int64_t seek_pos;
     int *quit;
 } PlayerState;
 

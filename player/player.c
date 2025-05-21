@@ -55,8 +55,14 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
 
     player_state->audio_packet_queue = audio_state->audio_packet_queue;
     player_state->video_packet_queue = video_state->packet_queue;
-
-    player_state->quit = 0;
+    player_state->seek_mutex = SDL_CreateMutex();
+    if (!player_state->seek_mutex) {
+        log_error("Could not create seek mutex");
+        return -1;
+    }
+    player_state->seek_complete = 1;
+    player_state->quit = malloc(sizeof(int));
+    *player_state->quit = 0;
     video_state->quit = player_state->quit;
     audio_state->quit = player_state->quit;
 
@@ -65,6 +71,35 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
     return 0;
 }
 
+static void stream_seek(PlayerState *player_state, int64_t pos, double incr) {
+    SDL_LockMutex(player_state->seek_mutex);
+
+    if (!player_state->seek_req && player_state->seek_complete) {
+        player_state->seek_pos = pos;
+        player_state->seek_flags = (incr < 0) ? AVSEEK_FLAG_BACKWARD : 0;
+        player_state->seek_req = 1;
+        player_state->seek_complete = 0;
+    }
+
+    SDL_UnlockMutex(player_state->seek_mutex);
+}
+
+static void handle_seek(PlayerState *player_state, double incr) {
+    if (!player_state) return;
+
+    double pos;
+    SDL_LockMutex(player_state->seek_mutex);
+    pos = get_master_clock(player_state);
+    SDL_UnlockMutex(player_state->seek_mutex);
+
+    pos += incr;
+    if (pos < 0) pos = 0;
+
+    double duration = player_state->format_context->duration / (double) AV_TIME_BASE;
+    if (pos > duration) pos = duration - 1.0;
+
+    stream_seek(player_state, (int64_t) (pos * AV_TIME_BASE), incr);
+}
 
 int player_run(PlayerState *player_state) {
     SDL_Event event;
@@ -79,17 +114,98 @@ int player_run(PlayerState *player_state) {
     schedule_refresh(player_state->video_state, 40); // pushes an FF_REFRESH_EVENT to event loop
 
     while (true) {
+        if (*player_state->quit) {
+            log_info("Quiting player");
+            break;
+        }
+        if (player_state->seek_req) {
+            SDL_LockMutex(player_state->seek_mutex);
+            int stream_index = -1;
+            int64_t seek_target = player_state->seek_pos;
+
+            if (player_state->audio_state->stream_index >= 0) {
+                stream_index = player_state->audio_state->stream_index;
+            } else if (player_state->video_state->stream_index >= 0) {
+                stream_index = player_state->video_state->stream_index;
+            }
+
+            if (stream_index >= 0) {
+                seek_target = av_rescale_q(seek_target,
+                                           AV_TIME_BASE_Q,
+                                           player_state->format_context->streams[stream_index]->time_base);
+            }
+            if (av_seek_frame(player_state->format_context, stream_index, seek_target, player_state->seek_flags) < 0) {
+                log_error("Error while seeking");
+            } else {
+                if (player_state->audio_state->stream_index >= 0) {
+                    sync_state->audio_clock = seek_target / (double) AV_TIME_BASE;
+                    packet_queue_flush(player_state->audio_packet_queue);
+                    AVPacket *audio_flush_packet = av_packet_alloc();
+                    if (!audio_flush_packet) {
+                        log_error("failed to allocate flush packet");
+                        return -1;
+                    }
+
+                    audio_flush_packet->data = NULL;
+                    packet_queue_put(player_state->audio_packet_queue, audio_flush_packet);
+                    av_packet_free(&audio_flush_packet);
+                    log_info("Flushed audio queue");
+                }
+
+                if (player_state->video_state->stream_index >= 0) {
+                    packet_queue_flush(player_state->video_packet_queue);
+
+                    AVPacket *video_flush_packet = av_packet_alloc();
+                    if (!video_flush_packet) {
+                        log_error("failed to allocate flush packet");
+                        return -1;
+                    }
+
+                    video_flush_packet->data = NULL;
+                    packet_queue_put(player_state->video_packet_queue, video_flush_packet);
+                    av_packet_free(&video_flush_packet);
+                    log_info("Flushed video queue");
+                    SDL_Delay(10);
+                }
+            }
+            player_state->seek_req = 0;
+            player_state->seek_complete = 1;
+            SDL_UnlockMutex(player_state->seek_mutex);
+        }
         SDL_WaitEvent(&event);
         switch (event.type) {
+            case SDL_KEYDOWN:
+                switch (event.key.keysym.sym) {
+                    case SDLK_LEFT:
+                        handle_seek(player_state, -10.0);
+                        break;
+                    case SDLK_RIGHT:
+                        handle_seek(player_state, 10.0);
+                        break;
+                    case SDLK_UP:
+                        handle_seek(player_state, 60.0);
+                        break;
+                    case SDLK_DOWN:
+                        handle_seek(player_state, -60.0);
+                        break;
+                    default:
+                        break;
+                }
+                break;
+
             case FF_QUIT_EVENT:
             case SDL_QUIT:
-                *player_state->quit = 1;
+                if (player_state && player_state->quit) {
+                    *player_state->quit = 1;
+                }
                 SDL_Quit();
                 return 0;
-                break;
             case FF_REFRESH_EVENT:
-                video_refresh_timer(event.user.data1);
+                if (event.user.data1) {
+                    video_refresh_timer(event.user.data1);
+                }
                 break;
+
             default:
                 break;
         }
@@ -111,4 +227,9 @@ void player_cleanup(PlayerState *player_state) {
         free(player_state->audio_state);
         log_info("Freed player audio state");
     }
+    if (player_state->seek_mutex) {
+        SDL_DestroyMutex(player_state->seek_mutex);
+    }
+
+    free(player_state->quit);
 }

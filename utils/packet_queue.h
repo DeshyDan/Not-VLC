@@ -20,6 +20,7 @@ typedef struct PacketQueue {
 
 void packet_queue_init(PacketQueue *queue, char *name);
 void packet_queue_destroy(PacketQueue *queue);
+void packet_queue_flush(PacketQueue *queue);
 int packet_queue_put(PacketQueue *queue, AVPacket *packet);
 int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block);
 int packet_queueing_thread(void *userdata);

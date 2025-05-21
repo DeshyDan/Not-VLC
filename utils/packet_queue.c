@@ -67,8 +67,16 @@ int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
         }
     }
     SDL_UnlockMutex(queue->mutex);
-    log_info("[%s] Packet dequeued: %d packets, size: %d", queue->name,  queue->nb_packets, queue->size);
+    log_info("[%s] Packet dequeued: %d packets, size: %d", queue->name, queue->nb_packets, queue->size);
     return ret;
+}
+
+void packet_queue_flush(PacketQueue *queue) {
+    SDL_LockMutex(queue->mutex);
+    av_fifo_reset2(queue->packet_fifo);
+    queue->nb_packets = 0;
+    queue->size = 0;
+    SDL_UnlockMutex(queue->mutex);
 }
 
 void packet_queue_destroy(PacketQueue *queue) {
@@ -90,7 +98,7 @@ int packet_queueing_thread(void *userdata) {
     AVPacket *packet = av_packet_alloc();
 
     while (true) {
-        if (player_state->quit) {
+        if (*player_state->quit) {
             log_warn("Player quit, exiting packet queueing thread");
             break;
         }
