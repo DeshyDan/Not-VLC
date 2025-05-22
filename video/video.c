@@ -231,6 +231,8 @@ int video_thread(void *userdata) {
     double presentation_time_stamp; // Tells us when the video should be displayed
 
     while (true) {
+        wait_if_paused();
+
         if (packet_queue_get(video_state->packet_queue, packet, 1) < 0) {
             log_warn("Nothing in the video queue");
             break;
@@ -275,8 +277,7 @@ int video_thread(void *userdata) {
 
     av_free(packet);
 
-    return
-            0;
+    return 0;
 }
 
 void video_display(VideoState *video_state) {

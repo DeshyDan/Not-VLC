@@ -26,6 +26,9 @@ typedef struct PlayerState {
     SDL_Thread *video_decode_thread;
     SDL_Thread *packet_queueing_thread;
     SDL_mutex *seek_mutex;
+    SDL_mutex *pause_mutex;
+    SDL_cond *pause_cond;
+    int paused;
     int seek_complete;
     int seek_req;
     int seek_flags;
@@ -36,6 +39,8 @@ typedef struct PlayerState {
 
 
 int player_init(PlayerState *player, const char *filename, SDL_Renderer *renderer);
+
+void wait_if_paused();
 
 void player_cleanup(PlayerState *player);
 

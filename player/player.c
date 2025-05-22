@@ -161,6 +161,31 @@ static void flush_queues(PlayerState *player_state, int64_t seek_target) {
     }
 }
 
+static void toggle_pause(PlayerState *player_state) {
+    SDL_LockMutex(player_state->pause_mutex);
+    player_state->paused = !player_state->paused;
+
+    if (!player_state->paused) {
+        SDL_CondBroadcast(player_state->pause_cond);
+    }
+
+    SDL_UnlockMutex(player_state->pause_mutex);
+
+    SDL_PauseAudio(player_state->paused);
+
+    log_info("Player %s", player_state->paused ? "paused" : "resumed");
+}
+
+
+void wait_if_paused() {
+    PlayerState *player_state = sync_state->player_state;
+    SDL_LockMutex(player_state->pause_mutex);
+    while (player_state->paused && !*player_state->quit) {
+        SDL_CondWait(player_state->pause_cond, player_state->pause_mutex);
+    }
+    SDL_UnlockMutex(player_state->pause_mutex);
+}
+
 int player_run(PlayerState *player_state) {
     SDL_Event event;
     player_state->packet_queueing_thread = SDL_CreateThread(packet_queueing_thread, "packet queuing thread",
@@ -177,6 +202,11 @@ int player_run(PlayerState *player_state) {
         if (*player_state->quit) {
             log_info("Quiting player");
             break;
+        }
+        if (player_state->paused) {
+            av_read_pause(player_state->format_context);
+        } else {
+            av_read_play(player_state->format_context);
         }
         if (player_state->seek_req) {
             SDL_LockMutex(player_state->seek_mutex);
@@ -217,6 +247,9 @@ int player_run(PlayerState *player_state) {
         switch (event.type) {
             case SDL_KEYDOWN:
                 switch (event.key.keysym.sym) {
+                    case SDLK_SPACE:
+                        toggle_pause(player_state);
+                        break;
                     case SDLK_LEFT:
                         handle_seek(player_state, -10.0);
                         break;

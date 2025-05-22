@@ -119,6 +119,8 @@ int packet_queueing_thread(void *userdata) {
     AVPacket *packet = av_packet_alloc();
 
     while (true) {
+        wait_if_paused();
+
         if (*player_state->quit) {
             log_warn("Player quit, exiting packet queueing thread");
             break;
