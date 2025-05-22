@@ -13,6 +13,18 @@
 #include "../utils/sync.h"
 #include "../video/video.h"
 
+static void discard_unused_streams(PlayerState *player_state) {
+    for (int i = 0; i < player_state->format_context->nb_streams; i++) {
+        AVStream *stream = player_state->format_context->streams[i];
+        if (i != player_state->video_state->stream_index &&
+            i != player_state->audio_state->stream_index) {
+            stream->discard = AVDISCARD_ALL;
+            log_debug("Discarding stream %d", i);
+        }
+    }
+    log_info("Discarded unused streams");
+}
+
 int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *renderer) {
     player_state->format_context = avformat_alloc_context();
 
@@ -43,16 +55,15 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
         log_error("Could not allocate video/audio state");
         return -1;
     }
-
-    if (audio_init(audio_state, player_state) < 0) {
-        log_error("Could not initialize audio");
-        return -1;
-    }
-
     if (video_init(video_state, player_state, renderer) < 0) {
         log_error("Could not initialize video");
         return -1;
     }
+    if (audio_init(audio_state, player_state) < 0) {
+        log_error("Could not initialize audio");
+        return -1;
+    }
+    set_get_audio_clock_fn((GetAudioClockFn) get_audio_clock, video_state, player_state->audio_state);
 
     player_state->audio_packet_queue = audio_state->audio_packet_queue;
     player_state->video_packet_queue = video_state->packet_queue;
@@ -68,6 +79,7 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
     audio_state->quit = player_state->quit;
 
     sync_init(DEFAULT_AV_SYNC_TYPE, player_state);
+    discard_unused_streams(player_state);
 
     return 0;
 }

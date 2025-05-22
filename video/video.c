@@ -327,15 +327,14 @@ void video_display(VideoState *video_state) {
 }
 
 static int find_stream_index(VideoState *video_state, AVFormatContext *format_context) {
-    video_state->stream_index = -1;
     video_state->stream_index = av_find_best_stream(format_context,
                                                     AVMEDIA_TYPE_VIDEO,
-                                                    AVMEDIA_TYPE_VIDEO,
+                                                    -1,
                                                     -1,
                                                     NULL,
                                                     0);
 
-    if (video_state->stream_index == -1) {
+    if (video_state->stream_index < 0) {
         log_error("Could not find video stream");
         return -1;
     }
@@ -433,7 +432,6 @@ int video_init(VideoState *video_state, PlayerState *player_state, SDL_Renderer 
         return -1;
     };
 
-    set_get_audio_clock_fn((GetAudioClockFn) get_audio_clock, video_state, player_state->audio_state);
 
     return 0;
 }

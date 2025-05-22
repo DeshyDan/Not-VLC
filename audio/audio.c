@@ -9,6 +9,7 @@
 #include "../libs/microlog/microlog.h"
 #include "../player/player.h"
 #include "../utils/sync.h"
+#include "../video/video.h"
 
 int audio_decode_frame(AudioState *audio_state) {
     int data_size = 0;
@@ -239,16 +240,17 @@ cleanup:
     return ret;
 }
 
-static int find_stream_index(AudioState *audio_state, AVFormatContext *fmt_ctx) {
-    audio_state->stream_index = -1;
+static int find_stream_index(PlayerState *player_state, AVFormatContext *fmt_ctx) {
+    AudioState *audio_state = player_state->audio_state;
+    int related_stream = player_state->video_state->stream_index;
     audio_state->stream_index = av_find_best_stream(fmt_ctx,
                                                     AVMEDIA_TYPE_AUDIO,
-                                                    AVMEDIA_TYPE_AUDIO,
-                                                    AVMEDIA_TYPE_VIDEO,
+                                                    -1,
+                                                    related_stream,
                                                     NULL,
                                                     0);
 
-    if (audio_state->stream_index == -1) {
+    if (audio_state->stream_index < 0) {
         log_error("Could not find audio stream");
         return -1;
     }
@@ -257,7 +259,7 @@ static int find_stream_index(AudioState *audio_state, AVFormatContext *fmt_ctx) 
 }
 
 int audio_init(AudioState *audio_state, PlayerState *player_state) {
-    if (find_stream_index(audio_state, player_state->format_context) < 0) {
+    if (find_stream_index(player_state, player_state->format_context) < 0) {
         log_error("Could not find audio stream index");
         return -1;
     }
