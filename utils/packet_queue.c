@@ -17,6 +17,12 @@
 
 int packet_queue_put(PacketQueue *queue, AVPacket *packet) {
     AVPacket *pkt_copy = av_packet_alloc();
+
+    if (!pkt_copy) {
+        log_error("[%s]Failed to allocate packet copy", queue->name);
+        return -1;
+    }
+
     if (av_packet_ref(pkt_copy, packet) < 0) {
         av_packet_free(&pkt_copy);
         return -1;
@@ -34,12 +40,21 @@ int packet_queue_put(PacketQueue *queue, AVPacket *packet) {
     return 0;
 }
 
-void packet_queue_init(PacketQueue *queue, char *name) {
+int packet_queue_init(PacketQueue *queue, char *name) {
     queue->packet_fifo = av_fifo_alloc2(32, sizeof(AVPacket *), AV_FIFO_FLAG_AUTO_GROW);
     queue->mutex = SDL_CreateMutex();
+    if (!queue->mutex) {
+        log_error("Failed to create %s mutex: %s", name, SDL_GetError());
+        return -1;
+    }
     queue->cond = SDL_CreateCond();
+    if (!queue->cond) {
+        log_error("Failed to create %s condition variable: %s", name, SDL_GetError());
+        return -1;
+    }
     queue->name = name;
     log_info("[%s] Packet queue initialized", name);
+    return 0;
 }
 
 int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
@@ -47,10 +62,10 @@ int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
     int ret = 0;
 
     SDL_LockMutex(queue->mutex);
-    log_info("[%s] Locked packet queue mutex, waiting for packet...", queue->name);
+    log_debug("[%s] Locked packet queue mutex, waiting for packet...", queue->name);
     while (true) {
         if (av_fifo_read(queue->packet_fifo, &pkt, 1) >= 0) {
-            log_info("[%s] Got packet from queue", queue->name);
+            log_debug("[%s] Got packet from queue", queue->name);
             queue->nb_packets--;
             queue->size -= pkt->size;
             av_packet_move_ref(packet, pkt);
@@ -58,7 +73,7 @@ int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
             ret = 1;
             break;
         } else if (!block) {
-            log_info("[%s] No packet available and not blocking", queue->name);
+            log_debug("[%s] No packet available and not blocking", queue->name);
             ret = 0;
             break;
         } else {
@@ -73,13 +88,19 @@ int packet_queue_get(PacketQueue *queue, AVPacket *packet, int block) {
 
 void packet_queue_flush(PacketQueue *queue) {
     SDL_LockMutex(queue->mutex);
-    av_fifo_reset2(queue->packet_fifo);
+
+    AVPacket *pkt;
+    while (av_fifo_read(queue->packet_fifo, &pkt, 1) >= 0) {
+        av_packet_free(&pkt);
+    }
     queue->nb_packets = 0;
     queue->size = 0;
     SDL_UnlockMutex(queue->mutex);
+    log_info("[%s] Packet queue flushed", queue->name);
 }
 
 void packet_queue_destroy(PacketQueue *queue) {
+    packet_queue_flush(queue);
     if (queue->packet_fifo) {
         av_fifo_freep2(&queue->packet_fifo);
     }
@@ -117,7 +138,7 @@ int packet_queueing_thread(void *userdata) {
                 break;
             }
         }
-        log_info("Read packet: stream_index=%d, size=%d", packet->stream_index, packet->size);
+        log_debug("Read packet: stream_index=%d, size=%d", packet->stream_index, packet->size);
 
         if (packet->stream_index == player_state->video_state->stream_index) {
             packet_queue_put(player_state->video_packet_queue, packet);

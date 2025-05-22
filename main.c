@@ -1,4 +1,3 @@
-#include <assert.h>
 #include <stdio.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -11,6 +10,7 @@
 #include "player/player.h"
 
 int main(void) {
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) < 0) {
         log_error("Could not initialize SDL: %s", SDL_GetError());
         return -1;
@@ -45,12 +45,18 @@ int main(void) {
 
     SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
 
+    // TODO: Try rendering with Vulkan
     renderer = SDL_CreateRenderer(window, -1,
                                   SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer) {
         log_error("Could not create renderer: %s", SDL_GetError());
         response = -1;
         goto cleanup;
+    } else {
+        SDL_RendererInfo renderer_info = {0};
+        if (!SDL_GetRendererInfo(renderer, &renderer_info)) {
+            log_info("Renderer name: %s", renderer_info.name);
+        }
     }
 
     if (player_init(player, URL, renderer) < 0) {

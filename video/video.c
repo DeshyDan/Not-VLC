@@ -429,7 +429,9 @@ int video_init(VideoState *video_state, PlayerState *player_state, SDL_Renderer 
     }
     video_state->packet_queue = malloc(sizeof(PacketQueue));
 
-    packet_queue_init(video_state->packet_queue, "Video Queue");
+    if (packet_queue_init(video_state->packet_queue, "Video Queue") < 0) {
+        return -1;
+    };
 
     set_get_audio_clock_fn((GetAudioClockFn) get_audio_clock, video_state, player_state->audio_state);
 
@@ -438,11 +440,12 @@ int video_init(VideoState *video_state, PlayerState *player_state, SDL_Renderer 
 
 int video_state_reset(VideoState *video_state) {
     // TODO: What about the pictures queues?
-    video_state->frame_timer = (double)av_gettime() / 1000000.0;
+    video_state->frame_timer = (double) av_gettime() / 1000000.0;
     video_state->frame_last_delay = 40e-3;
     video_state->video_current_pts = NAN;
     video_state->video_current_pts_time = av_gettime();
 }
+
 void video_cleanup(VideoState *video_state) {
     if (video_state->texture) {
         SDL_DestroyTexture(video_state->texture);

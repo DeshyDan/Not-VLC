@@ -267,7 +267,9 @@ int audio_init(AudioState *audio_state, PlayerState *player_state) {
         return -1;
     }
     audio_state->audio_packet_queue = malloc(sizeof(PacketQueue));
-    packet_queue_init(audio_state->audio_packet_queue, "Audio Queue");
+    if (packet_queue_init(audio_state->audio_packet_queue, "Audio Queue") < 0) {
+        return -1;
+    };
     log_info("Initialized audio packet queue");
 
     return 0;
