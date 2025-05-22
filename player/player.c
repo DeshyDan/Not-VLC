@@ -72,12 +72,13 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
     return 0;
 }
 
-static void stream_seek(PlayerState *player_state, int64_t pos, int flags) {
+static void stream_seek(PlayerState *player_state, int64_t pos, int64_t rel, int flags) {
     SDL_LockMutex(player_state->seek_mutex);
 
     if (!player_state->seek_req && player_state->seek_complete) {
         player_state->seek_pos = pos;
         player_state->seek_flags = flags;
+        player_state->seek_rel = rel;
         player_state->seek_req = 1;
         player_state->seek_complete = 0;
 
@@ -110,7 +111,7 @@ static void handle_seek(PlayerState *player_state, double incr) {
 
     int seek_flags = (incr < 0) ? AVSEEK_FLAG_BACKWARD : 0;
     seek_flags |= AVSEEK_FLAG_ANY;
-    stream_seek(player_state, seek_target, seek_flags);
+    stream_seek(player_state, seek_target, incr, seek_flags);
 }
 
 static void flush_codec_buffers(PlayerState *player_state) {
@@ -182,7 +183,12 @@ int player_run(PlayerState *player_state) {
                                            AV_TIME_BASE_Q,
                                            player_state->format_context->streams[stream_index]->time_base);
 
-                if (av_seek_frame(player_state->format_context, stream_index, seek_target, seek_flags) < 0) {
+                int64_t seek_min = player_state->seek_rel > 0
+                                       ? seek_target - player_state->seek_rel + 2
+                                       : INT64_MIN;
+                int64_t seek_max = player_state->seek_rel > 0 ? seek_target + player_state->seek_rel - 2 : INT64_MAX;
+                if (avformat_seek_file(player_state->format_context, stream_index, seek_min, seek_target, seek_max,
+                                       seek_flags) < 0) {
                     log_error("Error while seeking");
                 } else {
                     flush_codec_buffers(player_state);

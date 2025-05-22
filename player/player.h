@@ -29,6 +29,7 @@ typedef struct PlayerState {
     int seek_complete;
     int seek_req;
     int seek_flags;
+    int seek_rel;
     int64_t seek_pos;
     int *quit;
 } PlayerState;
