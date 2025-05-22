@@ -215,9 +215,9 @@ static int stream_component_open(AudioState *audio_state, AVFormatContext *forma
     }
     log_info("Opened SDL audio device");
 
+    audio_state->format_context = format_context;
     audio_state->stream = format_context->streams[audio_state->stream_index];
     audio_state->codec_context = codec_context;
-    audio_state->format_context = format_context;
     audio_state->buffer_size = 0;
     audio_state->buffer_index = 0;
     audio_state->packet = (AVPacket){0};

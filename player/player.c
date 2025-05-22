@@ -67,7 +67,7 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
     video_state->quit = player_state->quit;
     audio_state->quit = player_state->quit;
 
-    sync_init(DEFAULT_AV_SYNC_TYPE);
+    sync_init(DEFAULT_AV_SYNC_TYPE, player_state);
 
     return 0;
 }
@@ -92,7 +92,12 @@ static void handle_seek(PlayerState *player_state, double incr) {
 
     double pos;
     SDL_LockMutex(player_state->seek_mutex);
-    pos = get_master_clock(player_state);
+    if (sync_state->av_sync_type == AV_SYNC_AUDIO_MASTER ||
+        sync_state->av_sync_type == AV_SYNC_VIDEO_MASTER) {
+        pos = get_master_clock();
+    } else {
+        pos = get_external_clock();
+    }
     SDL_UnlockMutex(player_state->seek_mutex);
 
     pos += incr;
@@ -101,7 +106,7 @@ static void handle_seek(PlayerState *player_state, double incr) {
     double duration = player_state->format_context->duration / (double) AV_TIME_BASE;
     if (pos > duration) pos = duration - 1.0;
 
-    int64_t seek_target = (int64_t)(pos * AV_TIME_BASE);
+    int64_t seek_target = (int64_t) (pos * AV_TIME_BASE);
 
     int seek_flags = (incr < 0) ? AVSEEK_FLAG_BACKWARD : 0;
     seek_flags |= AVSEEK_FLAG_ANY;

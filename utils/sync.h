@@ -5,7 +5,7 @@
 #ifndef SYNC_H
 #define SYNC_H
 #include <stdint.h>
-#define DEFAULT_AV_SYNC_TYPE AV_SYNC_VIDEO_MASTER
+#define DEFAULT_AV_SYNC_TYPE AV_SYNC_AUDIO_MASTER
 
 // type declarations
 typedef struct AudioState AudioState;
@@ -21,11 +21,13 @@ typedef struct SyncState {
     int av_sync_type;
     double audio_clock; // clock for audio
     double video_clock;
+
+    PlayerState *player_state;
 } SyncState;
 
 extern SyncState *sync_state;
 
-void sync_init(int sync_type);
+void sync_init(int sync_type, PlayerState *player_state);
 
 void sync_cleanup();
 
@@ -33,7 +35,7 @@ int synchronize_audio(AudioState *audio_state, short *samples, int samples_size,
 
 double synchronize_video(VideoState *video_state, AVFrame *frame, double presentation_time_stamp);
 
-double get_master_clock(void *userdata);
+double get_master_clock();
 
 double get_external_clock();
 

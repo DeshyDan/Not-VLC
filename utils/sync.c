@@ -56,19 +56,20 @@ double get_video_clock(VideoState *video_state) {
            (av_gettime() - video_state->video_current_pts_time) / 1000000.0;
 }
 
-double get_master_clock(void *userdata) {
+double get_master_clock() {
     if (!sync_state) return 0.0;
 
     switch (sync_state->av_sync_type) {
         case AV_SYNC_AUDIO_MASTER:
-            return get_audio_clock((AudioState *) userdata);
+            return get_audio_clock(sync_state->player_state->audio_state);
         case AV_SYNC_VIDEO_MASTER:
-            return get_video_clock((VideoState *) userdata);
+            return get_video_clock(sync_state->player_state->video_state);
 
         default:
             return get_external_clock();
     }
 }
+
 
 double synchronize_video(VideoState *video_state, AVFrame *frame, double presentation_time_stamp) {
     double frame_delay;
@@ -100,7 +101,7 @@ int synchronize_audio(AudioState *audio_state, short *samples, int samples_size,
         int min_size;
         int max_size;
 
-        ref_clock = get_master_clock(audio_state);
+        ref_clock = get_master_clock();
         diff = get_audio_clock(audio_state) - ref_clock;
 
         if (diff < AV_NOSYNC_THRESHOLD) {
@@ -149,10 +150,11 @@ int synchronize_audio(AudioState *audio_state, short *samples, int samples_size,
     return samples_size;
 }
 
-void sync_init(int sync_type) {
+void sync_init(int sync_type, PlayerState *player_state) {
     if (!sync_state) {
         sync_state = malloc(sizeof(SyncState));
         sync_state->av_sync_type = sync_type;
+        sync_state->player_state = player_state;
     }
 }
 
