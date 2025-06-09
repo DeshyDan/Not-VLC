@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.30)
-project(VLC_Clone C)
+project(Not_VLC C)
 
 set(CMAKE_C_STANDARD 11)
 
@@ -26,6 +26,18 @@ add_definitions(${FFMPEG_CFLAGS_OTHER})
 find_package(SDL2 REQUIRED)
 include_directories(${SDL2_INCLUDE_DIRS})
 
+## SDL2_ttf
+find_package(SDL2_ttf REQUIRED)
+if (SDL2_TTF_FOUND)
+    include_directories(${SDL2_TTF_INCLUDE_DIRS})
+    message("SDL2_TTF_INCLUDE_DIRS: ${SDL2_TTF_INCLUDE_DIRS}")
+    message("SDL2_TTF_LIBRARIES: ${SDL2_TTF_LIBRARIES}")
+else ()
+    pkg_check_modules(SDL2_TTF REQUIRED SDL2_ttf)
+    include_directories(${SDL2_TTF_INCLUDE_DIRS})
+endif ()
+
+
 add_library(microlog STATIC
         libs/microlog/microlog.c
         libs/microlog/microlog.h)
@@ -42,11 +54,13 @@ add_library(decoders STATIC
         utils/sync.h
         utils/sync.c)
 
-add_executable(VLC_Clone main.c
-       )
+add_executable(Not_VLC main.c)
 
-target_link_libraries(VLC_Clone PRIVATE
+target_link_libraries(Not_VLC PRIVATE
         ${FFMPEG_LIBRARIES}
         ${SDL2_LIBRARIES}
+        /opt/homebrew/lib/libSDL2_ttf.dylib
+        /opt/homebrew/lib/libfreetype.dylib
+        /opt/homebrew/lib/libharfbuzz.dylib
         microlog
         decoders)

@@ -7,6 +7,7 @@
 
 #include <SDL_render.h>
 #include <SDL_thread.h>
+#include <SDL_ttf.h>
 #include <libavformat/avformat.h>
 #include "../utils/packet_queue.h"
 
@@ -35,6 +36,15 @@ typedef struct PlayerState {
     int seek_rel;
     int64_t seek_pos;
     int *quit;
+
+    SDL_Rect pause_button;
+    SDL_Rect rewind_button;
+    SDL_Rect forward_button;
+    SDL_Texture *pause_texture;
+    SDL_Texture *play_texture;
+    SDL_Texture *rewind_texture;
+    SDL_Texture *forward_texture;
+    TTF_Font *font;
 } PlayerState;
 
 

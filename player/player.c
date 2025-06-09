@@ -13,6 +13,74 @@
 #include "../utils/sync.h"
 #include "../video/video.h"
 
+static int init_controls(PlayerState *player_state, SDL_Renderer *renderer) {
+    if (TTF_Init() == -1) {
+        log_error("TTF_Init: %s", TTF_GetError());
+        return -1;
+    }
+
+    player_state->font = TTF_OpenFont("../data/FreeSans.otf", 24);
+
+    if (!player_state->font) {
+        log_error("Failed to load any font: %s", TTF_GetError());
+        return -1;
+    }
+
+    SDL_Color white = {255, 255, 255, 255};
+    SDL_Surface *surface;
+
+    // PAUSE BTN
+    surface = TTF_RenderText_Solid(player_state->font, "||", white);
+    player_state->pause_texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_FreeSurface(surface);
+
+    // PLAY BTN
+    surface = TTF_RenderText_Solid(player_state->font, ">", white);
+    player_state->play_texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_FreeSurface(surface);
+
+    // REWIND BTN
+    surface = TTF_RenderText_Solid(player_state->font, "<<", white);
+    player_state->rewind_texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_FreeSurface(surface);
+
+    // FORWARD BTN
+    surface = TTF_RenderText_Solid(player_state->font, ">>", white);
+    player_state->forward_texture = SDL_CreateTextureFromSurface(renderer, surface);
+    SDL_FreeSurface(surface);
+
+    int button_width = 50;
+    int button_height = 50;
+    int margin = 10;
+    int bottom_margin = 20;
+
+    int render_width, render_height;
+    SDL_GetRendererOutputSize(renderer, &render_width, &render_height);
+
+    player_state->rewind_button = (SDL_Rect){
+        render_width / 2 - button_width - margin - button_width,
+        render_height - bottom_margin - button_height,
+        button_width,
+        button_height
+    };
+
+    player_state->pause_button = (SDL_Rect){
+        render_width / 2 - button_width / 2,
+        render_height - bottom_margin - button_height,
+        button_width,
+        button_height
+    };
+
+    player_state->forward_button = (SDL_Rect){
+        render_width / 2 + button_width + margin,
+        render_height - bottom_margin - button_height,
+        button_width,
+        button_height
+    };
+
+    return 0;
+}
+
 static void discard_unused_streams(PlayerState *player_state) {
     for (int i = 0; i < player_state->format_context->nb_streams; i++) {
         AVStream *stream = player_state->format_context->streams[i];
@@ -72,6 +140,9 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
         log_error("Could not create seek mutex");
         return -1;
     }
+    player_state->pause_mutex = SDL_CreateMutex();
+    player_state->pause_cond = SDL_CreateCond();
+    player_state->paused = 0;
     player_state->seek_complete = 1;
     player_state->quit = malloc(sizeof(int));
     *player_state->quit = 0;
@@ -80,6 +151,11 @@ int player_init(PlayerState *player_state, const char *filename, SDL_Renderer *r
 
     sync_init(DEFAULT_AV_SYNC_TYPE, player_state);
     discard_unused_streams(player_state);
+
+    if (init_controls(player_state, renderer)) {
+        log_error("Could not initialize controls");
+        return -1;
+    }
 
     return 0;
 }
@@ -245,6 +321,20 @@ int player_run(PlayerState *player_state) {
         }
         SDL_WaitEvent(&event);
         switch (event.type) {
+            case SDL_MOUSEBUTTONDOWN:
+                if (event.button.button == SDL_BUTTON_LEFT) {
+                    int x = event.button.x;
+                    int y = event.button.y;
+
+                    if (SDL_PointInRect(&(SDL_Point){x, y}, &player_state->pause_button)) {
+                        toggle_pause(player_state);
+                    } else if (SDL_PointInRect(&(SDL_Point){x, y}, &player_state->rewind_button)) {
+                        handle_seek(player_state, -10.0);
+                    } else if (SDL_PointInRect(&(SDL_Point){x, y}, &player_state->forward_button)) {
+                        handle_seek(player_state, 10.0);
+                    }
+                }
+                break;
             case SDL_KEYDOWN:
                 switch (event.key.keysym.sym) {
                     case SDLK_SPACE:
@@ -287,6 +377,23 @@ int player_run(PlayerState *player_state) {
 }
 
 void player_cleanup(PlayerState *player_state) {
+    if (player_state->pause_texture) {
+        SDL_DestroyTexture(player_state->pause_texture);
+    }
+    if (player_state->play_texture) {
+        SDL_DestroyTexture(player_state->play_texture);
+    }
+    if (player_state->rewind_texture) {
+        SDL_DestroyTexture(player_state->rewind_texture);
+    }
+    if (player_state->forward_texture) {
+        SDL_DestroyTexture(player_state->forward_texture);
+    }
+    if (player_state->font) {
+        TTF_CloseFont(player_state->font);
+    }
+    TTF_Quit();
+
     if (player_state->format_context) {
         avformat_close_input(&player_state->format_context);
         log_info("Closed player format context");

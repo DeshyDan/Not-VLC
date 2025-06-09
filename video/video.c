@@ -322,6 +322,16 @@ void video_display(VideoState *video_state) {
     log_info("Cleared renderer");
     SDL_RenderCopy(video_state->renderer, video_state->texture, NULL, &rect);
     log_info("Copied texture to renderer");
+
+    PlayerState *player_state = sync_state->player_state;
+    SDL_RenderCopy(video_state->renderer, player_state->rewind_texture, NULL, &player_state->rewind_button);
+
+    SDL_Texture *pause_play_texture = player_state->paused ? player_state->play_texture : player_state->pause_texture;
+    SDL_RenderCopy(video_state->renderer, pause_play_texture, NULL, &player_state->pause_button);
+
+    SDL_RenderCopy(video_state->renderer, player_state->forward_texture, NULL, &player_state->forward_button);
+
+
     SDL_RenderPresent(video_state->renderer);
     log_info("Presented renderer");
     SDL_UnlockMutex(video_state->screen_mutex);

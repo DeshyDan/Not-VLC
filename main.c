@@ -10,7 +10,6 @@
 #include "player/player.h"
 
 int main(void) {
-
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) < 0) {
         log_error("Could not initialize SDL: %s", SDL_GetError());
         return -1;
