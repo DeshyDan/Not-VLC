@@ -72,5 +72,6 @@ CMakeUserPresets.json
 cmake-build-*/
 
 out/*
+build/*
 
 .DS_Store
