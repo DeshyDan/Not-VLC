@@ -1,4 +1,9 @@
 # Video Player From Scratch
+## 📺 Check out build on YouTube 
+[Link to YouTube Video](https://youtu.be/ObqVTnCtLXY)
+[![Watch the video](docs/thumbnail.png)](https://youtu.be/ObqVTnCtLXY)
+
+<sub><sup>(Click thumbnail to watch)</sup></sub>
 
 Video player built using FFmpeg for processing and SDL for rendering. It supports basic playback controls
 and synchronization. I wrote in C, which i learnt for the first time when I took on this project. My C game is still a
